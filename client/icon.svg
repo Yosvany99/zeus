@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#000010"/>
+  <defs>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <polygon points="295,55 165,270 240,270 205,460 345,235 265,235 305,55"
+           fill="#00d4ff" filter="url(#glow)"/>
+  <text x="256" y="498" text-anchor="middle" font-family="monospace"
+        font-size="36" font-weight="bold" fill="#004e5e" letter-spacing="8">ZEUS</text>
+</svg>

@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#000010" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ZEUS" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <title>ZEUS</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    :root {
+      --cyan: #00d4ff;
+      --dim: #004e5e;
+      --red: #ff4444;
+      --green: #00ff99;
+      --orange: #ff9900;
+      --bg: #000010;
+      --card: #020d1a;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--cyan);
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+    }
+
+    .screen {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      padding-top: max(16px, env(safe-area-inset-top));
+      padding-bottom: max(24px, env(safe-area-inset-bottom));
+      gap: 12px;
+    }
+
+    /* ── Server row ── */
+    .server-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .server-row input {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--dim);
+      color: var(--cyan);
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 13px;
+      border-radius: 8px;
+      outline: none;
+      min-width: 0;
+    }
+    .server-row input:focus { border-color: var(--cyan); }
+    .server-row button {
+      background: var(--dim);
+      border: none;
+      color: var(--cyan);
+      padding: 10px 14px;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 1px;
+      border-radius: 8px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .server-row button:active { opacity: 0.7; }
+
+    /* ── Status ── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 6px 0;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      flex-shrink: 0;
+    }
+    .dot.on   { background: var(--cyan);   box-shadow: 0 0 10px var(--cyan); }
+    .dot.rec  { background: var(--green);  box-shadow: 0 0 10px var(--green); }
+    .dot.call { background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: pulse-dot 1.5s ease-in-out infinite; }
+    .dot.proc { background: var(--orange); box-shadow: 0 0 10px var(--orange); animation: pulse-dot 0.7s ease-in-out infinite; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.35} }
+    .status-label {
+      font-size: 11px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    /* ── Mic button ── */
+    .mic-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .mic-btn {
+      width: min(240px, 60vw);
+      height: min(240px, 60vw);
+      border-radius: 50%;
+      background: var(--card);
+      border: 3px solid var(--dim);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
+      user-select: none;
+      touch-action: none;
+    }
+    .mic-btn:active,
+    .mic-btn.pressed { transform: scale(0.93); }
+    .mic-btn.on   { border-color: var(--cyan);   box-shadow: 0 0 30px rgba(0,212,255,0.25); }
+    .mic-btn.rec  { border-color: var(--green);  box-shadow: 0 0 40px rgba(0,255,153,0.35); }
+    .mic-btn.call { border-color: var(--orange); box-shadow: 0 0 30px rgba(255,153,0,0.2); }
+    .mic-icon { font-size: clamp(52px, 14vw, 72px); line-height: 1; }
+    .mic-hint {
+      font-size: clamp(9px, 2.5vw, 11px);
+      letter-spacing: 2px;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+
+    /* ── Transcript cards ── */
+    .cards { display: flex; flex-direction: column; gap: 8px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--dim);
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .card-label {
+      font-size: 9px;
+      letter-spacing: 3px;
+      color: var(--dim);
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .card-text {
+      font-size: clamp(13px, 3.5vw, 15px);
+      line-height: 1.4;
+      min-height: 20px;
+      max-height: 5.6em;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--dim) transparent;
+    }
+
+    /* ── Call button ── */
+    .call-btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 2px solid var(--dim);
+      background: var(--card);
+      color: var(--cyan);
+      font-family: inherit;
+      font-size: 13px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .call-btn.active  { border-color: var(--orange); color: var(--orange); }
+    .call-btn:active { opacity: 0.7; }
+
+    /* ── Resume banner ── */
+    .resume-banner {
+      display: none;
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 2px solid var(--orange);
+      background: var(--card);
+      color: var(--orange);
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      text-align: center;
+      animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+    .resume-banner.show { display: block; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: none;
+      text-align: center;
+      font-size: 11px;
+      letter-spacing: 3px;
+      color: var(--dim);
+    }
+    .spinner.show { display: block; }
+    .spinner span { animation: blink 1s infinite; }
+    .spinner span:nth-child(2) { animation-delay: .33s; }
+    .spinner span:nth-child(3) { animation-delay: .66s; }
+    @keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
+
+    /* ── Text input button ── */
+    .text-btn {
+      position: absolute;
+      bottom: 14px;
+      right: 14px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--card);
+      border: 2px solid var(--dim);
+      color: var(--cyan);
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .text-btn:active { opacity: 0.7; }
+    .text-btn:hover  { border-color: var(--cyan); box-shadow: 0 0 14px rgba(0,212,255,0.2); }
+
+    /* ── Text modal ── */
+    .text-modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .text-modal-overlay.show { display: flex; }
+    .text-modal {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card);
+      border-top: 2px solid var(--cyan);
+      border-radius: 16px 16px 0 0;
+      padding: 20px 16px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .text-modal-label {
+      font-size: 9px;
+      letter-spacing: 3px;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .text-modal textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0a0f1a;
+      border: 1px solid var(--dim);
+      border-radius: 8px;
+      color: var(--cyan);
+      font-family: inherit;
+      font-size: 15px;
+      padding: 10px 12px;
+      resize: none;
+      height: 90px;
+      outline: none;
+    }
+    .text-modal textarea:focus { border-color: var(--cyan); }
+    .text-modal-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .text-modal-actions button {
+      flex: 1;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--dim);
+      background: #0a0f1a;
+      color: var(--cyan);
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .text-modal-actions button.send-btn {
+      border-color: var(--cyan);
+      background: rgba(0,212,255,0.08);
+    }
+    .text-modal-actions button:active { opacity: 0.7; }
+
+  </style>
+</head>
+<body>
+<div class="screen">
+
+  <div class="server-row">
+    <input id="url" type="url" placeholder="https://axel-agent.duckdns.org" autocomplete="off" spellcheck="false" />
+    <button onclick="saveUrl()">OK</button>
+  </div>
+
+  <div class="status-row">
+    <div class="dot on" id="dot"></div>
+    <span class="status-label" id="slabel">LISTO</span>
+  </div>
+
+  <button class="call-btn" id="call-btn" onclick="toggleCall()">📞 LLAMADA</button>
+  <div class="resume-banner" id="resume-banner" onclick="resumeCall()">📞 LLAMADA INTERRUMPIDA — TOCA PARA REANUDAR</div>
+
+  <div class="mic-wrap" style="position:relative;">
+    <div class="mic-btn on" id="btn"
+      ontouchstart="startRec(event)" ontouchend="stopRec(event)"
+      onmousedown="startRec(event)" onmouseup="stopRec(event)">
+      <span class="mic-icon">🎙️</span>
+      <span class="mic-hint" id="hint">MANTENER</span>
+    </div>
+    <button class="text-btn" onclick="openTextModal()" title="Escribir mensaje">⌨️</button>
+  </div>
+
+  <div class="text-modal-overlay" id="text-modal-overlay" onclick="closeTextModal(event)">
+    <div class="text-modal">
+      <div class="text-modal-label">Escribir mensaje a ZEUS</div>
+      <textarea id="text-input" placeholder="Escribe o pega tu mensaje aquí…" onkeydown="textModalKeydown(event)"></textarea>
+      <div class="text-modal-actions">
+        <button onclick="closeTextModal()">Cancelar</button>
+        <button class="send-btn" onclick="sendTextMessage()">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="spinner" id="spin">PROCESANDO<span>.</span><span>.</span><span>.</span></div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Tú</div>
+      <div class="card-text" id="txt-in">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">ZEUS</div>
+      <div class="card-text" id="txt-out">—</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let recorder = null, chunks = [], recording = false;
+  let thinkingCtx = null;
+  let mediaSessionAudio = null, mediaSessionReady = false;
+  let wakeLock = null;
+  let pollTimer = null;
+  let pendingSwUpdate = false;
+
+  function finishBusy() {
+    callBusy = false;
+    if (pendingSwUpdate && !callMode) { window.location.reload(); }
+  }
+
+  function setProcessing(on) {
+    if (on) {
+      spin.classList.add('show');
+      if (!callMode) {
+        dot.className = 'dot proc';
+        slabel.textContent = 'PROCESANDO';
+      }
+    } else {
+      spin.classList.remove('show');
+      if (!callMode) {
+        dot.className = 'dot on';
+        slabel.textContent = 'LISTO';
+      }
+    }
+  }
+
+  async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch {}
+  }
+
+  function releaseWakeLock() {
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (callMode && document.visibilityState === 'visible') requestWakeLock();
+  });
+
+  function setTxtIn(v)  { txtIn.textContent  = v; localStorage.setItem('zeus-txt-in',  v); txtIn.scrollTop  = txtIn.scrollHeight; }
+  function setTxtOut(v) { txtOut.textContent = v; localStorage.setItem('zeus-txt-out', v); txtOut.scrollTop = txtOut.scrollHeight; }
+
+  // VAD call mode
+  let callMode = false, callStream = null, callAudioCtx = null, callAnalyser = null;
+  let callAnimId = null, callRecorder = null, callChunks = [], callMime = '';
+  let callSpeaking = false, callSilTimer = null, callBusy = false, callVoiceFrames = 0;
+  const VAD_THRESHOLD = 0.035, VAD_SILENCE_MS = 1400, VAD_START_FRAMES = 9;
+
+  function startThinkingSound() {
+    try {
+      thinkingCtx = new AudioContext();
+      const master = thinkingCtx.createGain();
+      master.gain.value = 0.15;
+      master.connect(thinkingCtx.destination);
+
+      // Drone bajo continuo
+      const drone = thinkingCtx.createOscillator();
+      const droneGain = thinkingCtx.createGain();
+      drone.type = 'sine';
+      drone.frequency.value = 110; // A2
+      droneGain.gain.value = 0.35;
+      drone.connect(droneGain);
+      droneGain.connect(master);
+      drone.start();
+
+      // Arpeggio Am7: A3, C4, E4, G4
+      const notes = [220, 261.6, 329.6, 392];
+      let idx = 0;
+
+      function playNote() {
+        if (!thinkingCtx) return;
+        const osc = thinkingCtx.createOscillator();
+        const env = thinkingCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = notes[idx % notes.length];
+        idx++;
+        const t = thinkingCtx.currentTime;
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(1, t + 0.08);
+        env.gain.linearRampToValueAtTime(0, t + 0.55);
+        osc.connect(env);
+        env.connect(master);
+        osc.start(t);
+        osc.stop(t + 0.6);
+        setTimeout(playNote, 600);
+      }
+
+      playNote();
+    } catch {}
+  }
+
+  function stopThinkingSound() {
+    if (thinkingCtx) {
+      thinkingCtx.close().catch(() => {});
+      thinkingCtx = null;
+    }
+  }
+
+  const $ = id => document.getElementById(id);
+  const urlIn = $('url'), dot = $('dot'), slabel = $('slabel');
+  const btn = $('btn'), hint = $('hint'), spin = $('spin');
+  const txtIn = $('txt-in'), txtOut = $('txt-out');
+  // Load saved URL
+  const DEFAULT_URL = 'https://axel-agent.duckdns.org';
+  urlIn.value = localStorage.getItem('j-url') || DEFAULT_URL;
+
+  // ── Text input modal ──
+  function openTextModal() {
+    document.getElementById('text-modal-overlay').classList.add('show');
+    setTimeout(() => document.getElementById('text-input').focus(), 100);
+  }
+
+  function closeTextModal(e) {
+    if (e && e.target !== document.getElementById('text-modal-overlay')) return;
+    document.getElementById('text-modal-overlay').classList.remove('show');
+    document.getElementById('text-input').value = '';
+  }
+
+  function textModalKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTextMessage(); }
+    if (e.key === 'Escape') closeTextModal();
+  }
+
+  async function sendTextMessage() {
+    const texto = document.getElementById('text-input').value.trim();
+    if (!texto) return;
+    document.getElementById('text-modal-overlay').classList.remove('show');
+    document.getElementById('text-input').value = '';
+
+    setTxtIn(texto);
+    setProcessing(true);
+
+    try {
+      const res = await fetch(server() + '/texto', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texto }),
+      });
+      if (!res.ok) { setProcessing(false); return; }
+      const data = await res.json();
+      setProcessing(false);
+      if (data.task_id) {
+        setTxtIn(data.transcripcion || texto);
+        streamTask(data.task_id);
+      }
+    } catch (err) {
+      setProcessing(false);
+      console.error('sendTextMessage:', err);
+    }
+  }
+
+  function saveUrl() {
+    localStorage.setItem('j-url', urlIn.value.trim());
+    urlIn.blur();
+    poll();
+  }
+
+  function server() {
+    return (urlIn.value.trim() || DEFAULT_URL).replace(/\/$/, '');
+  }
+
+  function setRec(on) {
+    recording = on;
+    dot.className = 'dot' + (on ? ' rec' : ' on');
+    btn.className = 'mic-btn' + (on ? ' rec' : ' on');
+    hint.textContent = on ? 'GRABANDO…' : 'MANTENER';
+    slabel.textContent = on ? 'ESCUCHANDO' : 'LISTO';
+  }
+
+  async function poll() {
+    const isReconnecting = !callMode && localStorage.getItem('zeus-call-active') === '1';
+    if (document.visibilityState === 'hidden' && !isReconnecting) return;
+    const s = server(); if (!s) return;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(s + '/tarea-actual', { signal: ctrl.signal });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.task_id && !callBusy) {
+        setProcessing(true);
+        setTxtOut('');
+        streamTask(d.task_id);
+      }
+      if (isReconnecting) {
+        $('resume-banner').classList.remove('show');
+        const ok = await startCall(true);
+        if (!ok) $('resume-banner').classList.add('show');
+      }
+    } catch {} finally { clearTimeout(t); }
+  }
+
+  async function startRec(e) {
+    e.preventDefault();
+    if (recording) return;
+    const s = server();
+    if (!s) { alert('Configura la URL del servidor'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ['audio/webm;codecs=opus','audio/webm','audio/ogg','audio/mp4']
+        .find(m => MediaRecorder.isTypeSupported(m)) || '';
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+      chunks = [];
+      recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+      recorder.onstop = () => send(mime || 'audio/webm', stream);
+      recorder.start();
+      setRec(true);
+    } catch { alert('Sin acceso al micrófono. ¿Está en HTTPS?'); }
+  }
+
+  function stopRec(e) {
+    e.preventDefault();
+    if (!recording || !recorder) return;
+    recorder.stop();
+    setRec(false);
+  }
+
+  async function playAudio(res) {
+    const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'audio/mpeg' }));
+    await new Promise(resolve => {
+      const a = new Audio(url);
+      a.onended = () => { URL.revokeObjectURL(url); resolve(); };
+      a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+      a.play().catch(resolve);
+    });
+  }
+
+  function trackSettled(promise) {
+    let settled = false;
+    const p = promise.then(v => { settled = true; return v; });
+    p.isSettled = () => settled;
+    return p;
+  }
+
+  async function streamTask(taskId) {
+    setTxtOut('');
+    let fullText = '';
+    const MAX_ATTEMPTS = 120;
+
+    startThinkingSound();
+
+    async function fetchNext() {
+      let attempts = 0;
+      while (attempts++ < MAX_ATTEMPTS) {
+        let r;
+        try { r = await fetch(server() + '/siguiente/' + taskId, {}); }
+        catch { return null; }
+        if (!r.ok) return null;
+        const ct = r.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const d = await r.json();
+          if (d.status === 'done' || d.status === 'not_found') return null;
+          await new Promise(res => setTimeout(res, 500));
+          continue;
+        }
+        if (ct.includes('audio')) return r;
+      }
+      return null;
+    }
+
+    try {
+      let nextPromise = trackSettled(fetchNext());
+      while (true) {
+        const r = await nextPromise;
+        if (!r) break;
+        stopThinkingSound();
+        const chunk = decodeURIComponent(r.headers.get('X-Text') || '');
+        if (chunk) { fullText += (fullText ? ' ' : '') + chunk; setTxtOut(fullText); }
+        nextPromise = trackSettled(fetchNext());
+        await playAudio(r);
+        if (!nextPromise.isSettled()) startThinkingSound();
+      }
+    } finally {
+      stopThinkingSound();
+      if (callMode) {
+        spin.classList.remove('show');
+        dot.className = 'dot call';
+        btn.className = 'mic-btn call';
+        hint.textContent = 'ESCUCHANDO';
+        slabel.textContent = 'ESCUCHANDO';
+      } else {
+        setProcessing(false);
+      }
+      // Delay before re-enabling VAD — lets speaker audio decay so mic doesn't pick up echo
+      await new Promise(r => setTimeout(r, 700));
+      callVoiceFrames = 0;
+      finishBusy();
+    }
+  }
+
+  async function sendBlob(mimeType, blob) {
+    setProcessing(true);
+    const ext = mimeType.includes('mp4') ? '.mp4' : mimeType.includes('ogg') ? '.ogg' : '.webm';
+    const form = new FormData();
+    form.append('audio', blob, 'audio' + ext);
+    const vozCtrl = new AbortController();
+    const vozTimer = setTimeout(() => vozCtrl.abort(), 15000);
+    try {
+      const res = await fetch(server() + '/voz', { method: 'POST', body: form, signal: vozCtrl.signal });
+      if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('audio')) {
+          setTxtIn(decodeURIComponent(res.headers.get('X-Transcription') || '—'));
+          setTxtOut(decodeURIComponent(res.headers.get('X-Response') || '—'));
+          await playAudio(res);
+          setProcessing(false);
+          finishBusy();
+        } else {
+          const d = await res.json();
+          if (d.transcripcion) setTxtIn(d.transcripcion);
+          if (d.task_id) streamTask(d.task_id);
+          else { setProcessing(false); finishBusy(); }
+        }
+      } else { finishBusy(); }
+    } catch {
+      setTxtOut('Reconectando…');
+      setProcessing(false);
+      callBusy = false;
+      if (callMode) { stopCall(); localStorage.setItem('zeus-call-active', '1'); schedulePoll(3000); }
+    } finally { clearTimeout(vozTimer); }
+  }
+
+  async function send(mime, stream) {
+    stream.getTracks().forEach(t => t.stop());
+    await sendBlob(mime, new Blob(chunks, { type: mime }));
+  }
+
+  async function toggleCall() {
+    if (callMode) stopCall();
+    else await startCall();
+  }
+
+  async function startCall(silent = false) {
+    try {
+      callStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      callAudioCtx = new AudioContext();
+      const src = callAudioCtx.createMediaStreamSource(callStream);
+      callAnalyser = callAudioCtx.createAnalyser();
+      callAnalyser.fftSize = 512;
+      src.connect(callAnalyser);
+      callMime = ['audio/webm;codecs=opus','audio/webm','audio/ogg','audio/mp4']
+        .find(m => MediaRecorder.isTypeSupported(m)) || '';
+      callMode = true;
+      requestWakeLock();
+      localStorage.setItem('zeus-call-active', '1');
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      $('resume-banner').classList.remove('show');
+      $('call-btn').classList.add('active');
+      $('call-btn').textContent = '📵 COLGAR';
+      dot.className = 'dot call';
+      btn.className = 'mic-btn call';
+      hint.textContent = 'ESCUCHANDO';
+      slabel.textContent = 'ESCUCHANDO';
+      schedulePoll();
+      vadLoop();
+      return true;
+    } catch { if (!silent) alert('Sin acceso al micrófono. ¿Está en HTTPS?'); return false; }
+  }
+
+  function stopCall() {
+    callMode = false;
+    releaseWakeLock();
+    if (!pendingSwUpdate) localStorage.removeItem('zeus-call-active');
+    if (pendingSwUpdate) { window.location.reload(); return; }
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    if (callAnimId) { cancelAnimationFrame(callAnimId); callAnimId = null; }
+    if (callSilTimer) { clearTimeout(callSilTimer); callSilTimer = null; }
+    if (callRecorder && callRecorder.state !== 'inactive') callRecorder.stop();
+    if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
+    if (callAudioCtx) { callAudioCtx.close().catch(() => {}); callAudioCtx = null; }
+    callSpeaking = false;
+    callBusy = false;
+    callVoiceFrames = 0;
+    $('call-btn').classList.remove('active');
+    $('call-btn').textContent = '📞 LLAMADA';
+    dot.className = 'dot on';
+    btn.className = 'mic-btn on';
+    hint.textContent = 'MANTENER';
+    slabel.textContent = 'LISTO';
+  }
+
+  function vadLoop() {
+    if (!callMode) return;
+    const buf = new Float32Array(callAnalyser.fftSize);
+    callAnalyser.getFloatTimeDomainData(buf);
+    const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+
+    if (rms > VAD_THRESHOLD) {
+      if (callSilTimer) { clearTimeout(callSilTimer); callSilTimer = null; }
+      if (!callSpeaking && !callBusy) {
+        callVoiceFrames++;
+        if (callVoiceFrames >= VAD_START_FRAMES) {
+          callVoiceFrames = 0;
+          callSpeaking = true;
+          dot.className = 'dot rec';
+          btn.className = 'mic-btn rec';
+          hint.textContent = 'HABLANDO…';
+          slabel.textContent = 'ESCUCHANDO';
+          callChunks = [];
+          callRecorder = new MediaRecorder(callStream, callMime ? { mimeType: callMime } : {});
+          callRecorder.ondataavailable = e => e.data.size && callChunks.push(e.data);
+          callRecorder.onstop = async () => {
+            callSpeaking = false;
+            callBusy = true;
+            if (callMode) { dot.className = 'dot call'; btn.className = 'mic-btn call'; hint.textContent = 'ESCUCHANDO'; slabel.textContent = 'PROCESANDO'; }
+            if (callChunks.length) {
+              const mime = callRecorder.mimeType || callMime || 'audio/webm';
+              await sendBlob(mime, new Blob(callChunks, { type: mime }));
+            } else {
+              finishBusy();
+            }
+          };
+          callRecorder.start();
+        }
+      }
+    } else {
+      callVoiceFrames = 0;
+      if (callSpeaking && !callSilTimer) {
+        callSilTimer = setTimeout(() => {
+          callSilTimer = null;
+          if (callRecorder && callRecorder.state !== 'inactive') callRecorder.stop();
+        }, VAD_SILENCE_MS);
+      }
+    }
+
+    callAnimId = requestAnimationFrame(vadLoop);
+  }
+
+  function resumeCall() {
+    $('resume-banner').classList.remove('show');
+    startCall();
+  }
+
+  function setupMediaSession() {
+    if (!('mediaSession' in navigator) || mediaSessionReady) return;
+    // Silent 1-frame WAV loop — keeps media session alive for headphone buttons
+    if (!mediaSessionAudio) {
+      mediaSessionAudio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+      mediaSessionAudio.loop = true;
+      mediaSessionAudio.volume = 0;
+    }
+    mediaSessionAudio.play().then(() => {
+      mediaSessionReady = true;
+      navigator.mediaSession.metadata = new MediaMetadata({ title: 'ZEUS', artist: 'Asistente de voz' });
+      navigator.mediaSession.setActionHandler('play',  () => { if (!callMode) startCall(); });
+      navigator.mediaSession.setActionHandler('pause', () => { if (callMode) stopCall(); });
+      navigator.mediaSession.setActionHandler('stop',  () => { if (callMode) stopCall(); });
+      navigator.mediaSession.playbackState = 'playing';
+    }).catch(() => {});
+  }
+
+  // Activate on any user gesture
+  document.addEventListener('pointerdown', setupMediaSession, { once: true });
+
+  async function init() {
+    const tin = localStorage.getItem('zeus-txt-in');
+    const tout = localStorage.getItem('zeus-txt-out');
+    if (tin)  txtIn.textContent  = tin;
+    if (tout) txtOut.textContent = tout;
+    const autoResume = localStorage.getItem('zeus-auto-resume') === '1';
+    if (autoResume) localStorage.removeItem('zeus-auto-resume');
+    await poll();
+    if (!callMode && localStorage.getItem('zeus-call-active') === '1') {
+      if (autoResume) startCall();
+      else $('resume-banner').classList.add('show');
+    }
+  }
+
+  function schedulePoll(forceDelay) {
+    if (pollTimer) clearTimeout(pollTimer);
+    const delay = forceDelay != null ? forceDelay
+      : (!callMode && localStorage.getItem('zeus-call-active') === '1' ? 3000 : 10000);
+    pollTimer = setTimeout(async () => { await poll(); schedulePoll(); }, delay);
+  }
+
+  init();
+  schedulePoll();
+
+  if ('serviceWorker' in navigator) {
+    let swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      pendingSwUpdate = true;
+      if (callMode) {
+        localStorage.setItem('zeus-auto-resume', '1');
+        stopCall();
+      } else if (!callBusy) {
+        window.location.reload();
+      }
+    });
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
+      setInterval(() => reg.update(), 5000);
+    }).catch(() => {});
+  }
+</script>
+</body>
+</html>
