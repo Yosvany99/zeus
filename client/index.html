@@ -681,6 +681,7 @@
   async function sendTextMessage() {
     const texto = document.getElementById('text-input').value.trim();
     if (!texto) return;
+    if (callBusy) return;
     document.getElementById('text-modal-overlay').classList.remove('show');
     document.getElementById('text-input').value = '';
 
@@ -698,6 +699,7 @@
       setProcessing(false);
       if (data.task_id) {
         setTxtIn(data.transcripcion || texto);
+        callBusy = true;
         streamTask(data.task_id);
       }
     } catch (err) {
@@ -773,16 +775,6 @@
     if (!recording || !recorder) return;
     recorder.stop();
     setRec(false);
-  }
-
-  async function playAudio(res) {
-    const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: 'audio/mpeg' }));
-    await new Promise(resolve => {
-      const a = new Audio(url);
-      a.onended = () => { URL.revokeObjectURL(url); resolve(); };
-      a.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-      a.play().catch(resolve);
-    });
   }
 
   function trackSettled(promise) {
@@ -878,19 +870,10 @@
     try {
       const res = await fetch(server() + '/voz', { method: 'POST', body: form, signal: vozCtrl.signal });
       if (res.ok) {
-        const ct = res.headers.get('content-type') || '';
-        if (ct.includes('audio')) {
-          setTxtIn(decodeURIComponent(res.headers.get('X-Transcription') || '—'));
-          setTxtOut(decodeURIComponent(res.headers.get('X-Response') || '—'));
-          await playAudio(res);
-          setProcessing(false);
-          finishBusy();
-        } else {
-          const d = await res.json();
-          if (d.transcripcion) setTxtIn(d.transcripcion);
-          if (d.task_id) streamTask(d.task_id);
-          else { setProcessing(false); finishBusy(); }
-        }
+        const d = await res.json();
+        if (d.transcripcion) setTxtIn(d.transcripcion);
+        if (d.task_id) streamTask(d.task_id);
+        else { setProcessing(false); finishBusy(); }
       } else { finishBusy(); }
     } catch {
       setTxtOut('Reconectando…');

@@ -64,7 +64,7 @@ CLAUDE_VOICE_PROMPT = (
     "NUNCA digas que no puedes acceder al sistema o a archivos. Siempre puedes."
 )
 
-PUNCT = frozenset(".?!\n")
+PUNCT = frozenset(".?!")
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 
