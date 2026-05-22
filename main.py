@@ -15,8 +15,8 @@ from urllib.parse import quote
 
 import edge_tts
 import psutil
-import speech_recognition as sr
 from dotenv import load_dotenv
+from groq import Groq
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -68,7 +68,7 @@ PUNCT = frozenset(".?!\n")
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 
-recognizer = sr.Recognizer()
+_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 audio_queues: dict[str, asyncio.Queue] = {}
 _history_lock = asyncio.Lock()
 _claude_sem = asyncio.Semaphore(1)  # one Claude call at a time — prevents history interleaving
@@ -339,38 +339,19 @@ app.add_middleware(
 
 # ── STT ────────────────────────────────────────────────────────────────────────
 
-def _convert_to_wav(input_path: str, output_path: str) -> None:
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", "-f", "wav", output_path],
-        capture_output=True, check=True, timeout=15,
-    )
-
-
-def _transcribe_google(wav_path: str) -> str:
-    try:
-        with sr.AudioFile(wav_path) as source:
-            audio = recognizer.record(source)
-        return recognizer.recognize_google(audio, language="es-ES")
-    except sr.UnknownValueError:
-        return ""
-    except sr.RequestError as e:
-        log.warning(f"Google STT error: {e}")
-        return ""
-
-
 def _transcribe_sync(audio_path: str) -> str:
-    wav_path = audio_path + "_16k.wav"
     try:
-        _convert_to_wav(audio_path, wav_path)
-        return _transcribe_google(wav_path)
-    except subprocess.CalledProcessError as e:
-        log.error(f"ffmpeg error: {e}")
+        with open(audio_path, "rb") as f:
+            result = _groq.audio.transcriptions.create(
+                file=(os.path.basename(audio_path), f),
+                model="whisper-large-v3",
+                language="es",
+                response_format="text",
+            )
+        return (result or "").strip()
+    except Exception as e:
+        log.warning(f"Groq STT error: {e}")
         return ""
-    finally:
-        try:
-            os.unlink(wav_path)
-        except OSError:
-            pass
 
 
 async def transcribe(audio_path: str) -> str:
