@@ -19,7 +19,7 @@ self.addEventListener('activate', e => {
 });
 
 // API paths that must always go to network
-const API_PATHS = ['/voz', '/siguiente/', '/tarea-actual', '/texto'];
+const API_PATHS = ['/voz', '/siguiente/', '/tarea-actual', '/texto', '/alerta', '/recuerda'];
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);

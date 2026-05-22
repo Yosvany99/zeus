@@ -161,6 +161,44 @@
       scrollbar-color: var(--dim) transparent;
     }
 
+    /* ── Metrics panel ── */
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .metric {
+      background: var(--card);
+      border: 1px solid var(--dim);
+      border-radius: 8px;
+      padding: 7px 10px;
+    }
+    .metric-label {
+      font-size: 8px;
+      letter-spacing: 2px;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .metric-bar {
+      height: 3px;
+      background: var(--dim);
+      border-radius: 2px;
+      margin: 4px 0 3px;
+      overflow: hidden;
+    }
+    .metric-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: var(--cyan);
+      transition: width 0.6s ease, background 0.4s;
+    }
+    .metric-fill.warn  { background: var(--orange); }
+    .metric-fill.crit  { background: var(--red); }
+    .metric-val {
+      font-size: 11px;
+      color: var(--cyan);
+    }
+
     /* ── Call button ── */
     .call-btn {
       width: 100%;
@@ -197,6 +235,23 @@
       animation: pulse-dot 1.5s ease-in-out infinite;
     }
     .resume-banner.show { display: block; }
+
+    /* ── Alert banner ── */
+    .alert-banner {
+      display: none;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 2px solid #ff4444;
+      background: var(--card);
+      color: #ff4444;
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .alert-banner.show { display: block; }
 
     /* ── Spinner ── */
     .spinner {
@@ -314,15 +369,41 @@
     <span class="status-label" id="slabel">LISTO</span>
   </div>
 
+  <div class="metrics" id="metrics-panel">
+    <div class="metric">
+      <div class="metric-label">CPU</div>
+      <div class="metric-bar"><div class="metric-fill" id="m-cpu-bar" style="width:0%"></div></div>
+      <div class="metric-val" id="m-cpu-val">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">RAM</div>
+      <div class="metric-bar"><div class="metric-fill" id="m-ram-bar" style="width:0%"></div></div>
+      <div class="metric-val" id="m-ram-val">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">DISCO</div>
+      <div class="metric-bar"><div class="metric-fill" id="m-disk-bar" style="width:0%"></div></div>
+      <div class="metric-val" id="m-disk-val">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">CARGA · UPTIME</div>
+      <div class="metric-bar"><div class="metric-fill" id="m-load-bar" style="width:0%"></div></div>
+      <div class="metric-val" id="m-load-val">—</div>
+    </div>
+  </div>
+
   <button class="call-btn" id="call-btn" onclick="toggleCall()">📞 LLAMADA</button>
   <div class="resume-banner" id="resume-banner" onclick="resumeCall()">📞 LLAMADA INTERRUMPIDA — TOCA PARA REANUDAR</div>
+  <div class="alert-banner" id="alert-banner"></div>
 
   <div class="mic-wrap" style="position:relative;">
     <div class="mic-btn on" id="btn"
       ontouchstart="startRec(event)" ontouchend="stopRec(event)"
-      onmousedown="startRec(event)" onmouseup="stopRec(event)">
-      <span class="mic-icon">🎙️</span>
-      <span class="mic-hint" id="hint">MANTENER</span>
+      onmousedown="startRec(event)" onmouseup="stopRec(event)"
+      style="position:relative;overflow:hidden;">
+      <canvas id="hud-canvas" style="position:absolute;inset:0;width:100%;height:100%;border-radius:50%;pointer-events:none;"></canvas>
+      <span class="mic-icon" style="position:relative;z-index:1;">🎙️</span>
+      <span class="mic-hint" id="hint" style="position:relative;z-index:1;">MANTENER</span>
     </div>
     <button class="text-btn" onclick="openTextModal()" title="Escribir mensaje">⌨️</button>
   </div>
@@ -369,16 +450,12 @@
   function setProcessing(on) {
     if (on) {
       spin.classList.add('show');
-      if (!callMode) {
-        dot.className = 'dot proc';
-        slabel.textContent = 'PROCESANDO';
-      }
+      if (!callMode) { dot.className = 'dot proc'; slabel.textContent = 'PROCESANDO'; }
+      setHudState('proc');
     } else {
       spin.classList.remove('show');
-      if (!callMode) {
-        dot.className = 'dot on';
-        slabel.textContent = 'LISTO';
-      }
+      if (!callMode) { dot.className = 'dot on'; slabel.textContent = 'LISTO'; }
+      setHudState(callMode ? 'call' : 'idle');
     }
   }
 
@@ -407,46 +484,60 @@
   let callSpeaking = false, callSilTimer = null, callBusy = false, callVoiceFrames = 0;
   const VAD_THRESHOLD = 0.035, VAD_SILENCE_MS = 1400, VAD_START_FRAMES = 9;
 
+  // ── Sound design ─────────────────────────────────────────────────────────────
+
+  function _playTones(notes, vol = 0.25) {
+    try {
+      const ctx = new AudioContext();
+      const master = ctx.createGain();
+      master.gain.value = vol;
+      master.connect(ctx.destination);
+      let maxEnd = 0;
+      notes.forEach(({ freq, start = 0, dur = 0.12, type = 'sine', freqEnd }) => {
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = type;
+        osc.frequency.value = freq;
+        const t = ctx.currentTime + start;
+        if (freqEnd) osc.frequency.linearRampToValueAtTime(freqEnd, t + dur);
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(1, t + 0.015);
+        env.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        osc.connect(env); env.connect(master);
+        osc.start(t); osc.stop(t + dur);
+        maxEnd = Math.max(maxEnd, start + dur);
+      });
+      setTimeout(() => ctx.close().catch(() => {}), (maxEnd + 0.4) * 1000);
+    } catch {}
+  }
+
+  function playActivationSound()   { _playTones([{freq:660,start:0,dur:0.09},{freq:880,start:0.1,dur:0.09},{freq:1320,start:0.2,dur:0.14}], 0.28); }
+  function playDeactivationSound() { _playTones([{freq:1320,start:0,dur:0.09},{freq:880,start:0.1,dur:0.09},{freq:440,start:0.2,dur:0.14}], 0.22); }
+  function playListenSound()       { _playTones([{freq:1100,start:0,dur:0.07,freqEnd:1450}], 0.18); }
+  function playResponseSound()     { _playTones([{freq:880,start:0,dur:0.07},{freq:1100,start:0.08,dur:0.08}], 0.2); }
+
   function startThinkingSound() {
     try {
       thinkingCtx = new AudioContext();
       const master = thinkingCtx.createGain();
-      master.gain.value = 0.15;
+      master.gain.value = 0.07;
       master.connect(thinkingCtx.destination);
 
-      // Drone bajo continuo
-      const drone = thinkingCtx.createOscillator();
-      const droneGain = thinkingCtx.createGain();
-      drone.type = 'sine';
-      drone.frequency.value = 110; // A2
-      droneGain.gain.value = 0.35;
-      drone.connect(droneGain);
-      droneGain.connect(master);
-      drone.start();
+      // Sawtooth → bandpass → tremolo: slow synthetic scanner
+      const osc    = thinkingCtx.createOscillator();
+      const filter = thinkingCtx.createBiquadFilter();
+      const trem   = thinkingCtx.createGain();
+      const lfo    = thinkingCtx.createOscillator();
+      const lfoG   = thinkingCtx.createGain();
 
-      // Arpeggio Am7: A3, C4, E4, G4
-      const notes = [220, 261.6, 329.6, 392];
-      let idx = 0;
+      osc.type = 'sawtooth'; osc.frequency.value = 110;
+      filter.type = 'bandpass'; filter.frequency.value = 620; filter.Q.value = 5;
+      lfo.type = 'sine'; lfo.frequency.value = 1.8;
+      lfoG.gain.value = 0.55; trem.gain.value = 0.5;
 
-      function playNote() {
-        if (!thinkingCtx) return;
-        const osc = thinkingCtx.createOscillator();
-        const env = thinkingCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = notes[idx % notes.length];
-        idx++;
-        const t = thinkingCtx.currentTime;
-        env.gain.setValueAtTime(0, t);
-        env.gain.linearRampToValueAtTime(1, t + 0.08);
-        env.gain.linearRampToValueAtTime(0, t + 0.55);
-        osc.connect(env);
-        env.connect(master);
-        osc.start(t);
-        osc.stop(t + 0.6);
-        setTimeout(playNote, 600);
-      }
-
-      playNote();
+      lfo.connect(lfoG); lfoG.connect(trem.gain);
+      osc.connect(filter); filter.connect(trem); trem.connect(master);
+      lfo.start(); osc.start();
     } catch {}
   }
 
@@ -457,10 +548,115 @@
     }
   }
 
+  // ── HUD canvas animation ──────────────────────────────────────────────────────
+
+  let hudAnimId = null, hudRms = 0, hudState = 'idle';
+
+  const HUD_COLORS = {
+    idle:    '#00d4ff',
+    rec:     '#00ff99',
+    proc:    '#ff9900',
+    call:    '#00d4ff',
+    talking: '#00ff99',
+  };
+
+  function startHud() {
+    const canvas = document.getElementById('hud-canvas');
+    if (!canvas || hudAnimId) return;
+    const ctx = canvas.getContext('2d');
+    let t = 0;
+
+    function resize() {
+      const s = canvas.offsetWidth;
+      canvas.width = s; canvas.height = s;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function draw() {
+      hudAnimId = requestAnimationFrame(draw);
+      t += 0.016;
+      const s = canvas.width, cx = s / 2, cy = s / 2, r = s / 2;
+      ctx.clearRect(0, 0, s, s);
+
+      const col = HUD_COLORS[hudState] || HUD_COLORS.idle;
+      const rms = Math.min(hudRms * 6, 1);
+      const pulse = hudState === 'proc' ? 0.5 + 0.5 * Math.sin(t * 6)
+                  : hudState === 'rec' || hudState === 'talking' ? 0.6 + 0.4 * rms
+                  : 0.3 + 0.12 * Math.sin(t * 1.4);
+
+      // Outer glow ring
+      const grd = ctx.createRadialGradient(cx, cy, r * 0.75, cx, cy, r);
+      grd.addColorStop(0, col + '00');
+      grd.addColorStop(1, col + Math.round(pulse * 55).toString(16).padStart(2, '0'));
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = grd; ctx.fill();
+
+      // Rotating arcs (3 arcs at 120° offset)
+      for (let i = 0; i < 3; i++) {
+        const angle = t * (0.8 + i * 0.15) + (i * Math.PI * 2 / 3);
+        const arcLen = (0.25 + pulse * 0.2) * Math.PI;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * (0.82 - i * 0.07), angle, angle + arcLen);
+        ctx.strokeStyle = col + Math.round((0.4 + pulse * 0.4) * 255).toString(16).padStart(2, '0');
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Inner pulsing circle
+      const innerR = r * (0.45 + pulse * 0.08);
+      ctx.beginPath(); ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+      ctx.strokeStyle = col + '33';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Tick marks (12 marks like a clock)
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+        const active = i % 3 === 0 || (hudState !== 'idle' && Math.random() < 0.08);
+        const len = active ? 0.1 : 0.05;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * r * 0.88, cy + Math.sin(a) * r * 0.88);
+        ctx.lineTo(cx + Math.cos(a) * r * (0.88 - len), cy + Math.sin(a) * r * (0.88 - len));
+        ctx.strokeStyle = active ? col + 'cc' : col + '33';
+        ctx.lineWidth = active ? 1.5 : 0.8;
+        ctx.stroke();
+      }
+    }
+
+    draw();
+  }
+
+  function setHudState(state) { hudState = state; }
+  function setHudRms(v) { hudRms = v; }
+
   const $ = id => document.getElementById(id);
   const urlIn = $('url'), dot = $('dot'), slabel = $('slabel');
   const btn = $('btn'), hint = $('hint'), spin = $('spin');
   const txtIn = $('txt-in'), txtOut = $('txt-out');
+  startHud();
+
+  // ── Typewriter ────────────────────────────────────────────────────────────────
+
+  let _twTimer = null, _twBase = '';
+
+  function typewriterAppend(newChunk, audioDurationMs) {
+    if (_twTimer) { clearInterval(_twTimer); _twTimer = null; }
+    _twBase = txtOut.textContent;
+    const target = (_twBase ? _twBase + ' ' : '') + newChunk;
+    const chars = target.slice(_twBase.length + (target !== newChunk ? 1 : 0));
+    const delay = Math.max(18, Math.min(60, audioDurationMs / (chars.length || 1)));
+    let i = 0;
+    const base = _twBase ? _twBase + ' ' : '';
+    _twTimer = setInterval(() => {
+      i++;
+      txtOut.textContent = base + chars.slice(0, i);
+      localStorage.setItem('zeus-txt-out', txtOut.textContent);
+      txtOut.scrollTop = txtOut.scrollHeight;
+      if (i >= chars.length) { clearInterval(_twTimer); _twTimer = null; _twBase = target; }
+    }, delay);
+  }
+
   // Load saved URL
   const DEFAULT_URL = 'https://axel-agent.duckdns.org';
   urlIn.value = localStorage.getItem('j-url') || DEFAULT_URL;
@@ -526,6 +722,7 @@
     btn.className = 'mic-btn' + (on ? ' rec' : ' on');
     hint.textContent = on ? 'GRABANDO…' : 'MANTENER';
     slabel.textContent = on ? 'ESCUCHANDO' : 'LISTO';
+    setHudState(on ? 'rec' : 'idle');
   }
 
   async function poll() {
@@ -596,7 +793,10 @@
   }
 
   async function streamTask(taskId) {
-    setTxtOut('');
+    if (_twTimer) { clearInterval(_twTimer); _twTimer = null; }
+    _twBase = '';
+    txtOut.textContent = '';
+    localStorage.setItem('zeus-txt-out', '');
     let fullText = '';
     const MAX_ATTEMPTS = 120;
 
@@ -627,10 +827,27 @@
         const r = await nextPromise;
         if (!r) break;
         stopThinkingSound();
+        playResponseSound();
         const chunk = decodeURIComponent(r.headers.get('X-Text') || '');
-        if (chunk) { fullText += (fullText ? ' ' : '') + chunk; setTxtOut(fullText); }
+
+        // Decode audio, get duration, sync typewriter
+        const arrayBuf = await r.arrayBuffer();
+        const audioUrl = URL.createObjectURL(new Blob([arrayBuf], { type: 'audio/mpeg' }));
+        const audioEl = new Audio(audioUrl);
+        const durMs = await new Promise(res => {
+          audioEl.addEventListener('loadedmetadata', () => res(audioEl.duration * 1000), { once: true });
+          audioEl.addEventListener('error', () => res(2000), { once: true });
+        });
+        if (chunk) typewriterAppend(chunk, durMs);
+
         nextPromise = trackSettled(fetchNext());
-        await playAudio(r);
+        if (callMode) setHudState('talking');
+        await new Promise(resolve => {
+          audioEl.onended = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          audioEl.onerror = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          audioEl.play().catch(resolve);
+        });
+        if (callMode) setHudState(nextPromise.isSettled() ? 'call' : 'proc');
         if (!nextPromise.isSettled()) startThinkingSound();
       }
     } finally {
@@ -704,6 +921,8 @@
       callMime = ['audio/webm;codecs=opus','audio/webm','audio/ogg','audio/mp4']
         .find(m => MediaRecorder.isTypeSupported(m)) || '';
       callMode = true;
+      playActivationSound();
+      setHudState('call');
       requestWakeLock();
       localStorage.setItem('zeus-call-active', '1');
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -738,6 +957,8 @@
     callBusy = false;
     callVoiceFrames = 0;
     if (pendingSwUpdate) { window.location.reload(); return; }
+    setHudState('idle');
+    playDeactivationSound();
     $('call-btn').classList.remove('active');
     $('call-btn').textContent = '📞 LLAMADA';
     dot.className = 'dot on';
@@ -751,6 +972,7 @@
     const buf = new Float32Array(callAnalyser.fftSize);
     callAnalyser.getFloatTimeDomainData(buf);
     const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+    setHudRms(rms);
 
     if (rms > VAD_THRESHOLD) {
       if (callSilTimer) { clearTimeout(callSilTimer); callSilTimer = null; }
@@ -769,7 +991,7 @@
           callRecorder.onstop = async () => {
             callSpeaking = false;
             callBusy = true;
-            if (callMode) { dot.className = 'dot call'; btn.className = 'mic-btn call'; hint.textContent = 'ESCUCHANDO'; slabel.textContent = 'PROCESANDO'; }
+            if (callMode) { dot.className = 'dot call'; btn.className = 'mic-btn call'; hint.textContent = 'ESCUCHANDO'; slabel.textContent = 'PROCESANDO'; setHudState('proc'); }
             if (callChunks.length) {
               const mime = callRecorder.mimeType || callMime || 'audio/webm';
               await sendBlob(mime, new Blob(callChunks, { type: mime }));
@@ -777,6 +999,7 @@
               finishBusy();
             }
           };
+          playListenSound();
           callRecorder.start();
         }
       }
@@ -819,6 +1042,36 @@
   // Activate on any user gesture
   document.addEventListener('pointerdown', setupMediaSession, { once: true });
 
+  function fmt(bytes) {
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+    return (bytes / 1048576).toFixed(0) + ' MB';
+  }
+  function fmtUptime(s) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+  }
+  function fillBar(barId, valId, pct, label) {
+    const bar = document.getElementById(barId);
+    const val = document.getElementById(valId);
+    if (!bar || !val) return;
+    bar.style.width = pct + '%';
+    bar.className = 'metric-fill' + (pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '');
+    val.textContent = label;
+  }
+
+  async function updateMetrics() {
+    try {
+      const r = await fetch(server() + '/metrics');
+      if (!r.ok) return;
+      const d = await r.json();
+      fillBar('m-cpu-bar',  'm-cpu-val',  d.cpu,      d.cpu + '% · load ' + d.load1);
+      fillBar('m-ram-bar',  'm-ram-val',  d.mem_pct,  fmt(d.mem_used) + ' / ' + fmt(d.mem_total));
+      fillBar('m-disk-bar', 'm-disk-val', d.disk_pct, fmt(d.disk_used) + ' / ' + fmt(d.disk_total));
+      const loadPct = Math.min(d.load1 * 100 / (navigator.hardwareConcurrency || 2), 100);
+      fillBar('m-load-bar', 'm-load-val', loadPct, d.load1 + ' · ' + fmtUptime(d.uptime));
+    } catch {}
+  }
+
   async function init() {
     const tin = localStorage.getItem('zeus-txt-in');
     const tout = localStorage.getItem('zeus-txt-out');
@@ -828,6 +1081,31 @@
     if (!callMode && localStorage.getItem('zeus-call-active') === '1') {
       $('resume-banner').classList.add('show');
     }
+    updateMetrics();
+    setInterval(updateMetrics, 10000);
+    checkAlerts();
+    setInterval(checkAlerts, 60000);
+  }
+
+  async function checkAlerts() {
+    try {
+      const r = await fetch('/alerta');
+      if (!r.ok) return;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('audio')) return;
+      const text = decodeURIComponent(r.headers.get('x-alert-text') || '');
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const banner = $('alert-banner');
+      banner.textContent = '⚠ ' + text;
+      banner.classList.add('show');
+      const audio = new Audio(url);
+      audio.addEventListener('ended', () => {
+        URL.revokeObjectURL(url);
+        setTimeout(() => banner.classList.remove('show'), 5000);
+      }, { once: true });
+      audio.play().catch(() => {});
+    } catch {}
   }
 
   function schedulePoll(forceDelay) {

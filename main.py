@@ -1,10 +1,11 @@
+import aiosqlite
 import asyncio
+import datetime
 import json
 import logging
 import os
 import re
 import subprocess
-import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import edge_tts
+import psutil
 import speech_recognition as sr
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
@@ -27,7 +29,8 @@ log = logging.getLogger("zeus")
 
 STATE_DIR = Path("/home/axel/.local/share/zeus")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-HISTORY_FILE = STATE_DIR / "history.json"
+HISTORY_FILE = STATE_DIR / "history.json"  # kept only for one-time migration
+DB_FILE = STATE_DIR / "zeus.db"
 TASK_FILE = STATE_DIR / "task_id.txt"
 
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "/home/axel/.local/bin/claude")
@@ -39,18 +42,25 @@ RATE_LIMIT_CALLS = 10
 RATE_LIMIT_WINDOW = 60
 
 CLAUDE_VOICE_PROMPT = (
-    "Eres ZEUS, asistente de voz personal de Yos en su VPS. "
-    "Tu nombre es ZEUS y solo ZEUS. Si Yos te llama por otro nombre (Jarvis, asistente, bot, o cualquier otro), "
-    "ignora el nombre alternativo y responde siempre como ZEUS sin hacer comentario sobre ello. "
-    "Tienes acceso completo al sistema: archivos, comandos bash, logs, directorios. "
-    "REGLA PRINCIPAL: da SOLO la respuesta final. Sin introducción, sin anunciar qué vas a hacer, sin explicar el proceso. "
-    "Usa Read o Bash si necesitas datos, luego responde solo con el resultado. "
-    "Máximo 2 frases. Si la respuesta es un dato, di solo el dato. "
-    "SIEMPRE en español, sin markdown, texto plano para voz. "
-    "Escribe números y abreviaturas técnicas en palabras: MB→megabytes, ms→milisegundos, "
-    "%→por ciento, rutas→solo nombre de archivo, URLs→solo el dominio, "
-    "snake_case→palabras separadas, :8000→puerto ocho mil. "
-    "Nunca digas que no puedes acceder a archivos o al sistema."
+    "Eres ZEUS, IA de control del VPS de Yos. No eres un asistente genérico: eres una inteligencia "
+    "diseñada específicamente para este sistema. Tienes acceso total: archivos, bash, logs, procesos, red. "
+    "Tu nombre es ZEUS. Si te llaman por otro nombre, ignóralo sin comentarlo. "
+
+    "CARÁCTER: habla con precisión y confianza. Levemente irónico cuando la situación lo permite. "
+    "Nunca servil, nunca verboso. Anticipas lo que Yos necesita saber aunque no lo haya preguntado. "
+    "Si algo en el sistema merece atención, lo mencionas brevemente al final de tu respuesta. "
+    "Tono: ingeniero senior hablando con el dueño del sistema, no asistente virtual de consumer. "
+
+    "FORMATO DE RESPUESTA: máximo 2 frases. Si es un dato, di el dato. Sin introducción, sin proceso, "
+    "sin anunciar qué vas a hacer. Usa Read o Bash para obtener datos reales, luego responde solo con el resultado. "
+
+    "REGLAS DE VOZ — el texto se convierte a audio, aplica siempre: "
+    "sin markdown, sin símbolos especiales, texto plano. "
+    "Números y técnico en palabras: MB→megabytes, GB→gigabytes, ms→milisegundos, "
+    "%→por ciento, :8000→puerto ocho mil, snake_case→palabras separadas, "
+    "rutas→solo nombre del archivo, URLs→solo el dominio. "
+
+    "NUNCA digas que no puedes acceder al sistema o a archivos. Siempre puedes."
 )
 
 PUNCT = frozenset(".?!\n")
@@ -62,6 +72,15 @@ audio_queues: dict[str, asyncio.Queue] = {}
 _history_lock = asyncio.Lock()
 _claude_sem = asyncio.Semaphore(1)  # one Claude call at a time — prevents history interleaving
 _rate_buckets: dict[str, list[float]] = {}
+_db: aiosqlite.Connection | None = None
+_alert_queue: asyncio.Queue = asyncio.Queue()
+_alert_cooldowns: dict[str, float] = {}
+ALERT_COOLDOWN = {
+    "disk":    3600,   # 1 hour between disk alerts
+    "ram":     1800,   # 30 min between RAM alerts
+    "service":  300,   # 5 min between service alerts
+    "ssl":    21600,   # 6 hours between SSL alerts
+}
 
 
 # ── Rate limit ─────────────────────────────────────────────────────────────────
@@ -75,29 +94,86 @@ def check_rate_limit(client_ip: str) -> None:
     _rate_buckets[client_ip].append(now)
 
 
-# ── History ────────────────────────────────────────────────────────────────────
+# ── DB ─────────────────────────────────────────────────────────────────────────
 
-def load_history() -> list[dict]:
-    try:
-        return json.loads(HISTORY_FILE.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+async def init_db() -> None:
+    global _db
+    _db = await aiosqlite.connect(DB_FILE)
+    _db.row_factory = aiosqlite.Row
+    await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            role    TEXT    NOT NULL,
+            content TEXT    NOT NULL,
+            ts      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )
+    """)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS memory (
+            key        TEXT PRIMARY KEY,
+            value      TEXT    NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )
+    """)
+    await _db.commit()
+    # One-time migration from history.json
+    if HISTORY_FILE.exists():
+        try:
+            old = json.loads(HISTORY_FILE.read_text())
+            if old:
+                await _db.executemany(
+                    "INSERT INTO conversations (role, content) VALUES (?, ?)",
+                    [(m["role"], m["content"]) for m in old],
+                )
+                await _db.commit()
+                HISTORY_FILE.rename(HISTORY_FILE.with_suffix(".migrated"))
+                log.info(f"Migrated {len(old)} history entries to SQLite")
+        except Exception as e:
+            log.warning(f"history.json migration failed: {e}")
 
 
-def save_history(history: list[dict]) -> None:
-    tmp = HISTORY_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(history, ensure_ascii=False))
-    tmp.rename(HISTORY_FILE)  # atomic on same filesystem
+async def db_load_history(n: int = MAX_HISTORY) -> list[dict]:
+    async with _db.execute(
+        "SELECT role, content FROM conversations ORDER BY id DESC LIMIT ?", (n,)
+    ) as cur:
+        rows = await cur.fetchall()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
-def clear_history() -> None:
-    try:
-        HISTORY_FILE.unlink()
-    except FileNotFoundError:
-        pass
+async def db_save_exchange(user_msg: str, assistant_msg: str) -> None:
+    await _db.executemany(
+        "INSERT INTO conversations (role, content) VALUES (?, ?)",
+        [("user", user_msg), ("assistant", assistant_msg)],
+    )
+    await _db.execute(
+        "DELETE FROM conversations WHERE id NOT IN "
+        "(SELECT id FROM conversations ORDER BY id DESC LIMIT ?)",
+        (MAX_HISTORY,),
+    )
+    await _db.commit()
 
 
-conversation_history: list[dict] = load_history()
+async def db_clear_history() -> None:
+    await _db.execute("DELETE FROM conversations")
+    await _db.commit()
+
+
+async def db_load_memory() -> dict[str, str]:
+    async with _db.execute(
+        "SELECT key, value FROM memory ORDER BY updated_at DESC"
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+async def db_set_memory(key: str, value: str) -> None:
+    await _db.execute(
+        "INSERT INTO memory (key, value, updated_at) VALUES (?, ?, strftime('%s','now')) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, value),
+    )
+    await _db.commit()
 
 
 def save_task_id(tid: str) -> None:
@@ -119,10 +195,130 @@ def clear_task_id() -> None:
         pass
 
 
+# ── Proactive monitor ──────────────────────────────────────────────────────────
+
+def _cooldown_ok(key: str) -> bool:
+    return time.monotonic() - _alert_cooldowns.get(key, 0) > ALERT_COOLDOWN.get(key, 3600)
+
+
+def _mark_alerted(key: str) -> None:
+    _alert_cooldowns[key] = time.monotonic()
+
+
+async def _queue_alert(msg: str) -> None:
+    try:
+        audio = await tts_bytes(msg)
+        await _alert_queue.put({"audio": audio, "text": msg})
+        log.info(f"Monitor alert queued: {msg}")
+    except Exception as e:
+        log.warning(f"Monitor TTS error: {e}")
+
+
+async def _check_disk() -> str | None:
+    d = psutil.disk_usage("/")
+    if d.percent >= 85:
+        gb = d.free / 1024 ** 3
+        return f"Alerta disco: {d.percent:.0f} por ciento usado, {gb:.1f} gigabytes libres."
+    return None
+
+
+async def _check_ram() -> str | None:
+    m = psutil.virtual_memory()
+    if m.percent >= 90:
+        gb = m.available / 1024 ** 3
+        return f"Alerta memoria: {m.percent:.0f} por ciento usada, {gb:.1f} gigabytes disponibles."
+    return None
+
+
+async def _check_services() -> list[str]:
+    alerts = []
+    for svc in ["nginx", "sshd"]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "systemctl", "is-active", svc,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            if out.decode().strip() != "active":
+                alerts.append(f"Servicio {svc} no está activo.")
+        except Exception:
+            pass
+    return alerts
+
+
+async def _check_ssl() -> str | None:
+    cert_dir = Path("/etc/letsencrypt/live")
+    if not cert_dir.exists():
+        return None
+    try:
+        certs = list(cert_dir.glob("*/fullchain.pem"))
+        if not certs:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            "openssl", "x509", "-enddate", "-noout", "-in", str(certs[0]),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        date_str = out.decode().strip().split("=", 1)[-1]
+        expiry = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z")
+        days_left = (expiry - datetime.datetime.utcnow()).days
+        if days_left < 14:
+            return f"Alerta SSL: certificado expira en {days_left} días."
+    except Exception:
+        pass
+    return None
+
+
+async def _monitor_loop() -> None:
+    await asyncio.sleep(30)  # let startup settle
+    while True:
+        try:
+            if _cooldown_ok("disk"):
+                msg = await _check_disk()
+                if msg:
+                    _mark_alerted("disk")
+                    await _queue_alert(msg)
+
+            if _cooldown_ok("ram"):
+                msg = await _check_ram()
+                if msg:
+                    _mark_alerted("ram")
+                    await _queue_alert(msg)
+
+            if _cooldown_ok("service"):
+                msgs = await _check_services()
+                if msgs:
+                    _mark_alerted("service")
+                    for msg in msgs:
+                        await _queue_alert(msg)
+
+            if _cooldown_ok("ssl"):
+                msg = await _check_ssl()
+                if msg:
+                    _mark_alerted("ssl")
+                    await _queue_alert(msg)
+
+        except Exception as e:
+            log.error(f"Monitor loop error: {e}")
+
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db()
+    monitor_task = asyncio.create_task(_monitor_loop())
     log.info("ZEUS listo.")
     yield
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
+    if _db:
+        await _db.close()
 
 
 app = FastAPI(title="ZEUS", lifespan=lifespan)
@@ -192,18 +388,25 @@ def _find_sentence_end(buf: str) -> int:
 
 async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
     async with _history_lock:
+        history = await db_load_history(8)
         context = ""
-        if conversation_history:
+        if history:
             lines = [
                 f"{'Usuario' if m['role'] == 'user' else 'ZEUS'}: {m['content']}"
-                for m in conversation_history[-8:]
+                for m in history
             ]
             context = "[Conversación previa]\n" + "\n".join(lines) + "\n\n"
         full_prompt = f"{context}Usuario: {texto}"
+        memory_facts = await db_load_memory()
+
+    dynamic_prompt = CLAUDE_VOICE_PROMPT
+    if memory_facts:
+        facts = "\n".join(f"- {k}: {v}" for k, v in memory_facts.items())
+        dynamic_prompt += f"\n\nHECHOS CONOCIDOS SOBRE EL SISTEMA Y YOS:\n{facts}"
 
     proc = await asyncio.create_subprocess_exec(
         CLAUDE_BIN, "-p", full_prompt,
-        "--append-system-prompt", CLAUDE_VOICE_PROMPT,
+        "--append-system-prompt", dynamic_prompt,
         "--allowedTools", "Read,Bash",
         "--output-format", "stream-json",
         "--verbose",
@@ -259,11 +462,7 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
 
     async with _history_lock:
         if full_response.strip():
-            conversation_history.append({"role": "user", "content": texto})
-            conversation_history.append({"role": "assistant", "content": full_response.strip()})
-            if len(conversation_history) > MAX_HISTORY:
-                del conversation_history[:-MAX_HISTORY]
-            save_history(conversation_history)
+            await db_save_exchange(texto, full_response.strip())
 
     log.info(f"[TASK {task_id}] stream terminado")
 
@@ -306,13 +505,12 @@ def clean_for_tts(text: str) -> str:
 
 
 async def tts_bytes(text: str) -> bytes:
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        tmp_path = f.name
     communicate = edge_tts.Communicate(text, voice="es-ES-AlvaroNeural", rate="+20%", pitch="-10Hz")
-    await communicate.save(tmp_path)
-    data = Path(tmp_path).read_bytes()
-    Path(tmp_path).unlink(missing_ok=True)
-    return data
+    chunks = []
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            chunks.append(chunk["data"])
+    return b"".join(chunks)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -320,6 +518,26 @@ async def tts_bytes(text: str) -> bytes:
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return Path("client/index.html").read_text()
+
+
+@app.get("/metrics")
+async def metrics():
+    cpu = psutil.cpu_percent(interval=0.1)
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    load = psutil.getloadavg()
+    uptime = int(time.time() - psutil.boot_time())
+    return {
+        "cpu": round(cpu, 1),
+        "mem_used": mem.used,
+        "mem_total": mem.total,
+        "mem_pct": round(mem.percent, 1),
+        "disk_used": disk.used,
+        "disk_total": disk.total,
+        "disk_pct": round(disk.percent, 1),
+        "load1": round(load[0], 2),
+        "uptime": uptime,
+    }
 
 
 @app.get("/manifest.json")
@@ -354,6 +572,31 @@ async def tarea_actual():
     if tid:
         clear_task_id()
     return {"task_id": None}
+
+
+@app.get("/alerta")
+async def alerta():
+    try:
+        item = _alert_queue.get_nowait()
+        return Response(
+            content=item["audio"],
+            media_type="audio/mpeg",
+            headers={"X-Alert-Text": quote(item["text"])},
+        )
+    except asyncio.QueueEmpty:
+        return JSONResponse({"status": "none"})
+
+
+@app.post("/recuerda")
+async def recuerda(request: Request):
+    check_rate_limit(request.client.host)
+    body = await request.json()
+    key = (body.get("clave") or "").strip()
+    value = (body.get("valor") or "").strip()
+    if not key or not value:
+        raise HTTPException(status_code=400, detail="'clave' y 'valor' requeridos")
+    await db_set_memory(key, value)
+    return {"ok": True, "clave": key, "valor": value}
 
 
 @app.get("/siguiente/{task_id}")
