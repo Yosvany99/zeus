@@ -395,6 +395,7 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
         "--include-partial-messages",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=10 * 1024 * 1024,
         cwd="/home/axel",
     )
 
