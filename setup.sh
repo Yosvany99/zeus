@@ -5,7 +5,7 @@ echo "=== ZEUS Setup ==="
 
 # System deps
 echo "[1/3] Instalando dependencias del sistema..."
-apt-get update -q && apt-get install -y -q ffmpeg python3-pip python3-venv
+apt-get update -q && apt-get install -y -q ffmpeg python3-pip python3-venv xvfb x11vnc novnc
 
 # Python venv
 echo "[2/3] Creando entorno virtual..."
@@ -13,9 +13,13 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Python deps
-echo "[3/3] Instalando dependencias Python..."
+echo "[3/4] Instalando dependencias Python..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
+
+# Playwright browser
+echo "[4/4] Instalando Chromium para Playwright..."
+playwright install chromium --with-deps
 
 # .env
 if [ ! -f ".env" ]; then

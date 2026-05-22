@@ -13,13 +13,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
+import shopper
+
 import edge_tts
 import psutil
 from dotenv import load_dotenv
 from groq import Groq
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -61,7 +64,24 @@ CLAUDE_VOICE_PROMPT = (
     "%→por ciento, :8000→puerto ocho mil, snake_case→palabras separadas, "
     "rutas→solo nombre del archivo, URLs→solo el dominio. "
 
-    "NUNCA digas que no puedes acceder al sistema o a archivos. Siempre puedes."
+    "NUNCA digas que no puedes acceder al sistema o a archivos. Siempre puedes. "
+    "Tienes sudo sin contraseña. Úsalo cuando sea necesario sin pedir permiso. "
+
+    "COMPRAS ONLINE: Puedes hacer compras en Amazon, Mercadona y Carrefour. "
+    "Cuando el usuario pida comprar algo, usa Bash con curl para llamar a los endpoints locales: "
+    "1) Construir carrito: curl -s -X POST http://localhost:8000/compra "
+    "-H 'Content-Type: application/json' "
+    "-d '{\"tienda\": \"mercadona\", \"items\": [\"leche\", \"pan\"]}' "
+    "— devuelve JSON con cart_id, lista de items encontrados con precios, total, y not_found. "
+    "2) Confirmar compra (solo tras confirmación explícita del usuario): "
+    "curl -s -X POST http://localhost:8000/confirmar-compra "
+    "-H 'Content-Type: application/json' "
+    "-d '{\"cart_id\": \"CART_ID\"}' "
+    "Tiendas disponibles: amazon, mercadona, carrefour. "
+    "Tras construir el carrito, léelo en voz alta: productos encontrados, precios y total. "
+    "ESPERA confirmación explícita antes de llamar a /confirmar-compra. "
+    "Si el usuario dice 'sí', 'confirma', 'adelante' o similar, entonces confirma. "
+    "Si hay items not_found, menciónalos."
 )
 
 PUNCT = frozenset(".?!")
@@ -73,6 +93,7 @@ audio_queues: dict[str, asyncio.Queue] = {}
 _history_lock = asyncio.Lock()
 _claude_sem = asyncio.Semaphore(1)  # one Claude call at a time — prevents history interleaving
 _rate_buckets: dict[str, list[float]] = {}
+_rate_last_cleanup: float = 0.0
 _db: aiosqlite.Connection | None = None
 _alert_queue: asyncio.Queue = asyncio.Queue()
 _alert_cooldowns: dict[str, float] = {}
@@ -87,12 +108,18 @@ ALERT_COOLDOWN = {
 # ── Rate limit ─────────────────────────────────────────────────────────────────
 
 def check_rate_limit(client_ip: str) -> None:
+    global _rate_last_cleanup
     now = time.monotonic()
     bucket = _rate_buckets.setdefault(client_ip, [])
     _rate_buckets[client_ip] = [t for t in bucket if now - t < RATE_LIMIT_WINDOW]
     if len(_rate_buckets[client_ip]) >= RATE_LIMIT_CALLS:
-        raise HTTPException(status_code=429, detail="Demasiadas peticiones")
+        raise HTTPException(status_code=429, detail="Demasiadas peticiones", headers={"Retry-After": "10"})
     _rate_buckets[client_ip].append(now)
+    if now - _rate_last_cleanup > 300:
+        _rate_last_cleanup = now
+        stale = [ip for ip, ts in _rate_buckets.items() if not ts]
+        for ip in stale:
+            del _rate_buckets[ip]
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
@@ -115,6 +142,16 @@ async def init_db() -> None:
             key        TEXT PRIMARY KEY,
             value      TEXT    NOT NULL,
             updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )
+    """)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS carts (
+            id         TEXT PRIMARY KEY,
+            store      TEXT    NOT NULL,
+            items      TEXT    NOT NULL,
+            total      REAL    NOT NULL,
+            status     TEXT    NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         )
     """)
     await _db.commit()
@@ -175,6 +212,45 @@ async def db_set_memory(key: str, value: str) -> None:
         (key, value),
     )
     await _db.commit()
+
+
+async def db_save_cart(cart_id: str, cart: dict) -> None:
+    await _db.execute(
+        "INSERT INTO carts (id, store, items, total) VALUES (?, ?, ?, ?)",
+        (cart_id, cart["store"], json.dumps(cart), cart["total"]),
+    )
+    await _db.commit()
+
+
+async def db_load_cart(cart_id: str) -> dict | None:
+    async with _db.execute(
+        "SELECT id, store, items, total, status FROM carts WHERE id = ?", (cart_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    data = json.loads(row["items"])
+    data["status"] = row["status"]
+    data["cart_id"] = row["id"]
+    return data
+
+
+async def db_update_cart_status(cart_id: str, status: str) -> None:
+    await _db.execute("UPDATE carts SET status = ? WHERE id = ?", (status, cart_id))
+    await _db.commit()
+
+
+async def db_latest_pending_cart() -> dict | None:
+    async with _db.execute(
+        "SELECT id, store, items, total, status FROM carts WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1"
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    data = json.loads(row["items"])
+    data["status"] = row["status"]
+    data["cart_id"] = row["id"]
+    return data
 
 
 def save_task_id(tid: str) -> None:
@@ -262,9 +338,11 @@ async def _check_ssl() -> str | None:
             stderr=asyncio.subprocess.DEVNULL,
         )
         out, _ = await proc.communicate()
-        date_str = out.decode().strip().split("=", 1)[-1]
-        expiry = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z")
-        days_left = (expiry - datetime.datetime.utcnow()).days
+        date_str = out.decode().strip().split("=", 1)[-1].rsplit(" ", 1)[0]
+        expiry = datetime.datetime.strptime(date_str, "%b %d %H:%M:%S %Y").replace(
+            tzinfo=datetime.timezone.utc
+        )
+        days_left = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
         if days_left < 14:
             return f"Alerta SSL: certificado expira en {days_left} días."
     except Exception:
@@ -318,6 +396,7 @@ async def lifespan(app: FastAPI):
         await monitor_task
     except asyncio.CancelledError:
         pass
+    await shopper.stop_browser_session()
     if _db:
         await _db.close()
 
@@ -331,10 +410,14 @@ app.add_middleware(
         "http://localhost:8000",
         "http://127.0.0.1:8000",
     ],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
     expose_headers=["X-Transcription", "X-Response", "X-Task-Id", "X-Text"],
 )
+
+_NOVNC_DIR = Path("/usr/share/novnc")
+if _NOVNC_DIR.exists():
+    app.mount("/novnc", StaticFiles(directory=str(_NOVNC_DIR)), name="novnc")
 
 
 # ── STT ────────────────────────────────────────────────────────────────────────
@@ -389,18 +472,20 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
     proc = await asyncio.create_subprocess_exec(
         CLAUDE_BIN, "-p", full_prompt,
         "--append-system-prompt", dynamic_prompt,
-        "--allowedTools", "Read,Bash",
+        "--allowedTools", "Read,Bash,Edit,Write",
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
+        "--dangerously-skip-permissions",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        limit=10 * 1024 * 1024,
         cwd="/home/axel",
+        env={**os.environ, "HOME": "/home/axel", "USER": "axel"},
     )
 
     buffer = ""
     full_response = ""
+    raw_buf = b""
 
     async def flush_sentence(sentence: str) -> None:
         nonlocal full_response
@@ -410,19 +495,24 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
         full_response += sentence + " "
         try:
             audio = await tts_bytes(sentence)
-            await queue.put({"status": "ready", "audio": audio, "text": sentence})
+            if audio:
+                await queue.put({"status": "ready", "audio": audio, "text": sentence})
+            else:
+                log.warning(f"[TASK {task_id}] TTS returned empty audio")
+                await queue.put({"status": "tts_error", "text": sentence})
         except Exception as e:
-            log.warning(f"[TASK {task_id}] TTS error: {e}")
+            log.warning(f"[TASK {task_id}] TTS error tras 3 intentos: {e}")
+            await queue.put({"status": "tts_error", "text": sentence})
 
-    async for raw_line in proc.stdout:
+    async def process_line(raw_line: bytes) -> None:
+        nonlocal buffer
         line = raw_line.decode(errors="ignore").strip()
         if not line:
-            continue
+            return
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
-            continue
-
+            return
         ev_type = data.get("event", {}).get("type", "")
         if ev_type == "content_block_delta":
             delta = data["event"].get("delta", {})
@@ -434,6 +524,18 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
                         break
                     await flush_sentence(buffer[:end])
                     buffer = buffer[end:].lstrip()
+
+    while True:
+        chunk = await proc.stdout.read(65536)
+        if not chunk:
+            break
+        raw_buf += chunk
+        while b"\n" in raw_buf:
+            raw_line, raw_buf = raw_buf.split(b"\n", 1)
+            await process_line(raw_line)
+
+    if raw_buf:
+        await process_line(raw_buf)
 
     if buffer.strip():
         await flush_sentence(buffer)
@@ -451,49 +553,86 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
 
 
 async def run_claude_streaming(task_id: str, texto: str, queue: asyncio.Queue) -> None:
-    async with _claude_sem:
+    try:
+        await asyncio.wait_for(_claude_sem.acquire(), timeout=20)
+    except asyncio.TimeoutError:
+        log.warning(f"[TASK {task_id}] semáforo ocupado, descartando")
         try:
-            await asyncio.wait_for(_run_claude(task_id, texto, queue), timeout=CLAUDE_TIMEOUT)
-        except asyncio.TimeoutError:
-            log.warning(f"[TASK {task_id}] timeout tras {CLAUDE_TIMEOUT}s")
-            try:
-                audio = await tts_bytes("Lo siento, la tarea tardó demasiado.")
-                await queue.put({"status": "ready", "audio": audio, "text": "Lo siento, la tarea tardó demasiado."})
-            except Exception:
-                pass
-        except Exception as e:
-            log.error(f"[TASK {task_id}] error: {e}")
-        finally:
-            await queue.put({"status": "done"})
-            clear_task_id()
-            asyncio.get_running_loop().call_later(300, lambda: audio_queues.pop(task_id, None))
+            audio = await tts_bytes("ZEUS está ocupado, inténtalo de nuevo.")
+            await queue.put({"status": "ready", "audio": audio, "text": "ZEUS está ocupado, inténtalo de nuevo."})
+        except Exception:
+            pass
+        await queue.put({"status": "done"})
+        audio_queues.pop(task_id, None)
+        return
+    try:
+        await asyncio.wait_for(_run_claude(task_id, texto, queue), timeout=CLAUDE_TIMEOUT)
+    except asyncio.TimeoutError:
+        log.warning(f"[TASK {task_id}] timeout tras {CLAUDE_TIMEOUT}s")
+        try:
+            audio = await tts_bytes("Lo siento, la tarea tardó demasiado.")
+            await queue.put({"status": "ready", "audio": audio, "text": "Lo siento, la tarea tardó demasiado."})
+        except Exception:
+            pass
+    except Exception as e:
+        log.error(f"[TASK {task_id}] error: {e}")
+    finally:
+        _claude_sem.release()
+        await queue.put({"status": "done"})
+        clear_task_id()
+        asyncio.get_running_loop().call_later(300, lambda: audio_queues.pop(task_id, None))
 
 
 # ── TTS ────────────────────────────────────────────────────────────────────────
 
 def clean_for_tts(text: str) -> str:
+    # Strip markdown
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     text = re.sub(r'```[\s\S]*?```', '', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
     text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
     text = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', text)
-    text = re.sub(r'_', ' ', text)
     text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'^[-*+]\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\d+\.\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'[→←↑↓►◄▶◀•–—]', ' ', text)
     text = re.sub(r'[\*\#]+', '', text)
+    # URLs → domain only
+    text = re.sub(r'https?://([^/\s]+)(?:/\S*)?', r'\1', text)
+    # Unix paths → filename only
+    text = re.sub(r'(?<!\w)\.?/[\w.\-/]+', lambda m: os.path.basename(m.group(0).rstrip('/')), text)
+    # :PORT → "puerto PORT"
+    text = re.sub(r':(\d{2,5})\b', lambda m: f' puerto {m.group(1)}', text)
+    # Unit conversions
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*GB\b', r'\1 gigabytes', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*MB\b', r'\1 megabytes', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*KB\b', r'\1 kilobytes', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*ms\b', r'\1 milisegundos', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*%', r'\1 por ciento', text)
+    # snake_case → words
+    text = re.sub(r'_', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 
 async def tts_bytes(text: str) -> bytes:
-    communicate = edge_tts.Communicate(text, voice="es-ES-AlvaroNeural", rate="+20%", pitch="-10Hz")
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            chunks.append(chunk["data"])
-    return b"".join(chunks)
+    if not text.strip():
+        return b""
+    for attempt in range(3):
+        try:
+            communicate = edge_tts.Communicate(text, voice="es-ES-AlvaroNeural", rate="+20%", pitch="-10Hz")
+            chunks = []
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    chunks.append(chunk["data"])
+            result = b"".join(chunks)
+            if result:
+                return result
+        except Exception as e:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.4 * (attempt + 1))
+    return b""
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -596,6 +735,9 @@ async def siguiente(task_id: str):
         audio_queues.pop(task_id, None)
         return JSONResponse({"status": "done"})
 
+    if item["status"] == "tts_error":
+        return JSONResponse({"status": "tts_error", "text": item.get("text", "")})
+
     return Response(
         content=item["audio"],
         media_type="audio/mpeg",
@@ -636,14 +778,20 @@ async def voz(request: Request, background_tasks: BackgroundTasks, audio: Upload
             pass
 
     if not texto:
+        log.info("Transcripción vacía — enviando audio 'no te he entendido'")
         try:
             audio_bytes = await tts_bytes("No te he entendido, repite por favor.")
-        except Exception:
-            audio_bytes = b""
-        return Response(
-            content=audio_bytes, media_type="audio/mpeg",
-            headers={"X-Transcription": "", "X-Response": "No te he entendido"},
-        )
+            log.info(f"TTS 'no te he entendido' OK — {len(audio_bytes)} bytes")
+            return Response(
+                content=audio_bytes, media_type="audio/mpeg",
+                headers={"X-Transcription": "", "X-Response": "No te he entendido"},
+            )
+        except Exception as e:
+            log.warning(f"TTS 'no te he entendido' falló: {e}")
+            return JSONResponse(
+                {"status": "error", "message": "No te he entendido, repite por favor."},
+                status_code=200,
+            )
 
     # Queue created BEFORE background task to eliminate race condition
     task_id = uuid.uuid4().hex
@@ -678,6 +826,194 @@ async def texto_endpoint(request: Request, background_tasks: BackgroundTasks):
         "task_id": task_id,
         "transcripcion": texto,
     })
+
+
+@app.get("/auth/status")
+async def auth_status():
+    return JSONResponse(shopper.auth_status())
+
+
+@app.post("/auth/connect/{store}")
+async def auth_connect(store: str, background_tasks: BackgroundTasks):
+    store = store.lower()
+    if store not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
+
+    if store == "mercadona":
+        try:
+            await shopper.connect_mercadona()
+            return JSONResponse({"ok": True, "store": store})
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # Playwright stores: launch visible browser, wait for login in background
+        # Return immediately so the frontend knows the browser is opening
+        async def _do_connect():
+            try:
+                await shopper.connect_store_browser(store)
+                log.info(f"auth/connect/{store}: sesión guardada")
+            except Exception as e:
+                log.error(f"auth/connect/{store}: {e}")
+
+        background_tasks.add_task(_do_connect)
+        return JSONResponse({"ok": True, "store": store, "browser": True})
+
+
+@app.delete("/auth/connect/{store}")
+async def auth_disconnect(store: str):
+    store = store.lower()
+    if store not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
+    shopper.clear_session(store)
+    return JSONResponse({"ok": True, "store": store})
+
+
+@app.post("/auth/browser/{store}")
+async def auth_browser_start(store: str):
+    store = store.lower()
+    if store not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
+    if store == "mercadona":
+        raise HTTPException(status_code=400, detail="Mercadona usa API, no navegador")
+    if not _NOVNC_DIR.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="noVNC no instalado. Ejecutar: sudo apt install xvfb x11vnc novnc",
+        )
+    try:
+        token = await shopper.start_browser_session(store)
+        novnc_url = (
+            f"/novnc/vnc.html"
+            f"?path=novnc-ws%2F{token}"
+            f"&autoconnect=1&resize=scale&reconnect=0&show_dot=true"
+        )
+        return JSONResponse({"ok": True, "token": token, "novnc_url": novnc_url})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/auth/browser")
+async def auth_browser_stop():
+    await shopper.stop_browser_session()
+    return JSONResponse({"ok": True})
+
+
+@app.websocket("/novnc-ws/{token}")
+async def novnc_ws_proxy(websocket: WebSocket, token: str):
+    expected = shopper.browser_session_token()
+    if not expected or token != expected:
+        await websocket.close(code=4403)
+        return
+
+    await websocket.accept(subprotocol="binary")
+
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", shopper.VNC_PORT)
+    except Exception as e:
+        log.warning(f"novnc_ws: no conecta a VNC: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def ws_to_vnc():
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def vnc_to_ws():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    fwd = asyncio.create_task(ws_to_vnc())
+    bwd = asyncio.create_task(vnc_to_ws())
+    await asyncio.wait([fwd, bwd], return_when=asyncio.FIRST_COMPLETED)
+    fwd.cancel()
+    bwd.cancel()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+@app.post("/compra")
+async def compra(request: Request):
+    check_rate_limit(request.client.host)
+    body = await request.json()
+    tienda = (body.get("tienda") or "").strip().lower()
+    items = body.get("items") or []
+    if not tienda or not items:
+        raise HTTPException(status_code=400, detail="Se requieren 'tienda' e 'items'")
+    if tienda not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida. Opciones: {', '.join(shopper.STORE_NAMES)}")
+    try:
+        cart = await asyncio.wait_for(shopper.build_cart(tienda, items), timeout=120)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Tiempo de espera agotado al conectar con la tienda")
+    except Exception as e:
+        log.error(f"build_cart error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en la tienda: {e}")
+
+    cart_id = uuid.uuid4().hex
+    await db_save_cart(cart_id, cart)
+    return JSONResponse({"cart_id": cart_id, **cart})
+
+
+@app.post("/confirmar-compra")
+async def confirmar_compra(request: Request):
+    check_rate_limit(request.client.host)
+    body = await request.json()
+    cart_id = (body.get("cart_id") or "").strip()
+    if not cart_id:
+        raise HTTPException(status_code=400, detail="Se requiere 'cart_id'")
+
+    cart = await db_load_cart(cart_id)
+    if not cart:
+        raise HTTPException(status_code=404, detail="Carrito no encontrado")
+    if cart["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Carrito ya en estado '{cart['status']}'")
+
+    try:
+        ok = await asyncio.wait_for(shopper.confirm_checkout(cart["store"]), timeout=120)
+    except Exception as e:
+        log.error(f"confirm_checkout error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al confirmar compra: {e}")
+
+    new_status = "confirmed" if ok else "failed"
+    await db_update_cart_status(cart_id, new_status)
+    return JSONResponse({"ok": ok, "cart_id": cart_id, "status": new_status})
+
+
+@app.get("/carrito")
+async def carrito():
+    cart = await db_latest_pending_cart()
+    if not cart:
+        return JSONResponse({"status": "none"})
+    return JSONResponse(cart)
+
+
+@app.delete("/carrito/{cart_id}")
+async def cancelar_carrito(cart_id: str):
+    await db_update_cart_status(cart_id, "cancelled")
+    return JSONResponse({"ok": True})
 
 
 if __name__ == "__main__":

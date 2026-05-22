@@ -267,6 +267,107 @@
     .spinner span:nth-child(3) { animation-delay: .66s; }
     @keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
 
+    /* ── Stores panel ── */
+    .stores-panel {
+      display: flex;
+      gap: 6px;
+    }
+    .store-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 4px;
+      border-radius: 10px;
+      border: 1px solid var(--dim);
+      background: var(--card);
+      color: var(--dim);
+      font-family: inherit;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+      position: relative;
+    }
+    .store-btn .store-icon { font-size: 20px; line-height: 1; }
+    .store-btn.connected {
+      border-color: var(--green);
+      color: var(--green);
+      box-shadow: 0 0 10px rgba(0,255,153,0.15);
+    }
+    .store-btn.connecting {
+      border-color: var(--orange);
+      color: var(--orange);
+      animation: pulse-dot 1s ease-in-out infinite;
+    }
+    .store-btn.error {
+      border-color: var(--red);
+      color: var(--red);
+    }
+    .store-btn:active { opacity: 0.7; }
+    .store-status-dot {
+      position: absolute;
+      top: 6px; right: 8px;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--dim);
+    }
+    .store-btn.connected .store-status-dot  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .store-btn.connecting .store-status-dot { background: var(--orange); }
+    .store-btn.error .store-status-dot      { background: var(--red); }
+
+    /* ── noVNC browser modal ── */
+    .novnc-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #000010;
+      z-index: 300;
+      flex-direction: column;
+    }
+    .novnc-overlay.show { display: flex; }
+    .novnc-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--card);
+      border-bottom: 1px solid var(--dim);
+      flex-shrink: 0;
+    }
+    .novnc-title {
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+    }
+    .novnc-hint {
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .novnc-close {
+      background: none;
+      border: 1px solid var(--red);
+      color: var(--red);
+      padding: 6px 14px;
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: 1px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .novnc-close:active { opacity: 0.7; }
+    .novnc-frame {
+      flex: 1;
+      border: none;
+      width: 100%;
+      background: #000;
+    }
+
     /* ── Text input button ── */
     .text-btn {
       position: absolute;
@@ -396,6 +497,24 @@
   <div class="resume-banner" id="resume-banner" onclick="resumeCall()">📞 LLAMADA INTERRUMPIDA — TOCA PARA REANUDAR</div>
   <div class="alert-banner" id="alert-banner"></div>
 
+  <div class="stores-panel" id="stores-panel">
+    <button class="store-btn" id="store-mercadona" onclick="connectStore('mercadona')" title="Conectar Mercadona">
+      <div class="store-status-dot"></div>
+      <span class="store-icon">🛒</span>
+      <span>Mercadona</span>
+    </button>
+    <button class="store-btn" id="store-amazon" onclick="connectStore('amazon')" title="Conectar Amazon">
+      <div class="store-status-dot"></div>
+      <span class="store-icon">📦</span>
+      <span>Amazon</span>
+    </button>
+    <button class="store-btn" id="store-carrefour" onclick="connectStore('carrefour')" title="Conectar Carrefour">
+      <div class="store-status-dot"></div>
+      <span class="store-icon">🏪</span>
+      <span>Carrefour</span>
+    </button>
+  </div>
+
   <div class="mic-wrap" style="position:relative;">
     <div class="mic-btn on" id="btn"
       ontouchstart="startRec(event)" ontouchend="stopRec(event)"
@@ -406,6 +525,17 @@
       <span class="mic-hint" id="hint" style="position:relative;z-index:1;">MANTENER</span>
     </div>
     <button class="text-btn" onclick="openTextModal()" title="Escribir mensaje">⌨️</button>
+  </div>
+
+  <div class="novnc-overlay" id="novnc-overlay">
+    <div class="novnc-header">
+      <div>
+        <div class="novnc-title" id="novnc-title">CONECTAR TIENDA</div>
+        <div class="novnc-hint">Inicia sesión en el navegador</div>
+      </div>
+      <button class="novnc-close" onclick="closeNovncModal()">✕ CANCELAR</button>
+    </div>
+    <iframe class="novnc-frame" id="novnc-frame" src="about:blank"></iframe>
   </div>
 
   <div class="text-modal-overlay" id="text-modal-overlay" onclick="closeTextModal(event)">
@@ -805,6 +935,7 @@
         if (ct.includes('application/json')) {
           const d = await r.json();
           if (d.status === 'done' || d.status === 'not_found') return null;
+          if (d.status === 'tts_error' && d.text) { typewriterAppend(d.text, 2000); }
           await new Promise(res => setTimeout(res, 500));
           continue;
         }
@@ -854,7 +985,13 @@
         setProcessing(false);
       }
       // Delay before re-enabling VAD — lets speaker audio decay so mic doesn't pick up echo
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 1500));
+      if (callAnalyser) {
+        const echoBuf = new Float32Array(callAnalyser.fftSize);
+        callAnalyser.getFloatTimeDomainData(echoBuf);
+        const echoRms = Math.sqrt(echoBuf.reduce((s, v) => s + v * v, 0) / echoBuf.length);
+        if (echoRms > VAD_THRESHOLD) await new Promise(r => setTimeout(r, 500));
+      }
       callVoiceFrames = 0;
       finishBusy();
     }
@@ -866,21 +1003,57 @@
     const form = new FormData();
     form.append('audio', blob, 'audio' + ext);
     const vozCtrl = new AbortController();
-    const vozTimer = setTimeout(() => vozCtrl.abort(), 15000);
+    const vozWarnTimer = setTimeout(() => { if (callMode) setTxtOut('Procesando…'); }, 10000);
+    const vozTimer = setTimeout(() => vozCtrl.abort(), 30000);
     try {
       const res = await fetch(server() + '/voz', { method: 'POST', body: form, signal: vozCtrl.signal });
+      clearTimeout(vozWarnTimer);
       if (res.ok) {
-        const d = await res.json();
-        if (d.transcripcion) setTxtIn(d.transcripcion);
-        if (d.task_id) streamTask(d.task_id);
-        else { setProcessing(false); finishBusy(); }
-      } else { finishBusy(); }
-    } catch {
-      setTxtOut('Reconectando…');
-      setProcessing(false);
-      callBusy = false;
-      if (callMode) { stopCall(); localStorage.setItem('zeus-call-active', '1'); schedulePoll(3000); }
-    } finally { clearTimeout(vozTimer); }
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('audio/')) {
+          const respText = decodeURIComponent(res.headers.get('X-Response') || 'No te he entendido');
+          setTxtOut(respText);
+          const arrayBuf = await res.arrayBuffer();
+          if (!arrayBuf.byteLength) { setProcessing(false); finishBusy(); return; }
+          const audioUrl = URL.createObjectURL(new Blob([arrayBuf], { type: 'audio/mpeg' }));
+          const audioEl = new Audio(audioUrl);
+          audioEl.addEventListener('ended', finishBusy, { once: true });
+          audioEl.addEventListener('error', finishBusy, { once: true });
+          audioEl.play().catch(() => finishBusy());
+          setProcessing(false);
+        } else {
+          const d = await res.json();
+          if (d.status === 'error') {
+            setTxtOut(d.message || 'No te he entendido');
+            setProcessing(false); finishBusy();
+          } else {
+            if (d.transcripcion) setTxtIn(d.transcripcion);
+            if (d.task_id) streamTask(d.task_id);
+            else { setProcessing(false); finishBusy(); }
+          }
+        }
+      } else {
+        if (res.status === 429) {
+          const retry = parseInt(res.headers.get('Retry-After') || '10') * 1000;
+          setTxtOut('Demasiadas peticiones, espera…');
+          await new Promise(r => setTimeout(r, retry));
+        }
+        finishBusy();
+      }
+    } catch(err) {
+      clearTimeout(vozWarnTimer);
+      if (err && err.name === 'AbortError') {
+        setTxtOut('Sin respuesta del servidor');
+        setProcessing(false);
+        callBusy = false;
+        finishBusy();
+      } else {
+        setTxtOut('Reconectando…');
+        setProcessing(false);
+        callBusy = false;
+        if (callMode) { stopCall(); localStorage.setItem('zeus-call-active', '1'); schedulePoll(3000); }
+      }
+    } finally { clearTimeout(vozTimer); clearTimeout(vozWarnTimer); }
   }
 
   async function send(mime, stream) {
@@ -1055,6 +1228,113 @@
     } catch {}
   }
 
+  // ── Stores auth ──────────────────────────────────────────────────────────────
+
+  const STORES = ['mercadona', 'amazon', 'carrefour'];
+  let _novncStore = null, _novncPoller = null;
+
+  function _setStoreState(store, state) {
+    const btn = $('store-' + store);
+    if (!btn) return;
+    btn.className = 'store-btn' + (state ? ' ' + state : '');
+    const labels = { connected: 'Desconectar', connecting: 'Abriendo...', error: 'Reintentar', '': 'Conectar' };
+    btn.title = (labels[state] || 'Conectar') + ' ' + store.charAt(0).toUpperCase() + store.slice(1);
+  }
+
+  async function refreshStoreStatus() {
+    try {
+      const r = await fetch(server() + '/auth/status');
+      if (!r.ok) return;
+      const data = await r.json();
+      STORES.forEach(s => {
+        if (s !== _novncStore) {
+          _setStoreState(s, data[s] ? 'connected' : '');
+        }
+      });
+    } catch {}
+  }
+
+  function openNovncModal(store, novncUrl) {
+    _novncStore = store;
+    $('novnc-title').textContent = 'LOGIN: ' + store.toUpperCase();
+    $('novnc-frame').src = novncUrl;
+    $('novnc-overlay').classList.add('show');
+
+    if (_novncPoller) clearInterval(_novncPoller);
+    _novncPoller = setInterval(async () => {
+      try {
+        const r = await fetch(server() + '/auth/status');
+        const d = await r.json();
+        if (d[store]) {
+          clearInterval(_novncPoller);
+          _novncPoller = null;
+          _setStoreState(store, 'connected');
+          _closeNovncOverlay();
+        }
+      } catch {}
+    }, 3000);
+
+    // Auto-cancel after 6 minutes
+    setTimeout(() => {
+      if (_novncPoller) {
+        clearInterval(_novncPoller);
+        _novncPoller = null;
+        if (_novncStore === store) {
+          _setStoreState(store, 'error');
+          _closeNovncOverlay();
+        }
+      }
+    }, 360000);
+  }
+
+  function _closeNovncOverlay() {
+    $('novnc-overlay').classList.remove('show');
+    $('novnc-frame').src = 'about:blank';
+    _novncStore = null;
+  }
+
+  function closeNovncModal() {
+    const store = _novncStore;
+    if (_novncPoller) { clearInterval(_novncPoller); _novncPoller = null; }
+    _closeNovncOverlay();
+    if (store) {
+      _setStoreState(store, '');
+      fetch(server() + '/auth/browser', { method: 'DELETE' }).catch(() => {});
+    }
+  }
+
+  async function connectStore(store) {
+    const btn = $('store-' + store);
+    const isConnected = btn.classList.contains('connected');
+
+    if (isConnected) {
+      try {
+        await fetch(server() + '/auth/connect/' + store, { method: 'DELETE' });
+        _setStoreState(store, '');
+      } catch { _setStoreState(store, 'error'); }
+      return;
+    }
+
+    _setStoreState(store, 'connecting');
+
+    if (store === 'mercadona') {
+      try {
+        const r = await fetch(server() + '/auth/connect/mercadona', { method: 'POST' });
+        const data = await r.json();
+        _setStoreState(store, (!r.ok || !data.ok) ? 'error' : 'connected');
+      } catch { _setStoreState(store, 'error'); }
+      return;
+    }
+
+    // Amazon / Carrefour: interactive browser via noVNC
+    try {
+      const r = await fetch(server() + '/auth/browser/' + store, { method: 'POST' });
+      const data = await r.json();
+      if (!r.ok) { _setStoreState(store, 'error'); return; }
+      openNovncModal(store, data.novnc_url);
+    } catch { _setStoreState(store, 'error'); }
+  }
+
   async function init() {
     const tin = localStorage.getItem('zeus-txt-in');
     const tout = localStorage.getItem('zeus-txt-out');
@@ -1068,6 +1348,8 @@
     setInterval(updateMetrics, 10000);
     checkAlerts();
     setInterval(checkAlerts, 60000);
+    refreshStoreStatus();
+    setInterval(refreshStoreStatus, 30000);
   }
 
   async function checkAlerts() {

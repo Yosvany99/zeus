@@ -6,3 +6,4 @@ groq
 edge-tts
 psutil
 aiosqlite
+playwright
