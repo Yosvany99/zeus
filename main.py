@@ -332,7 +332,7 @@ async def service_worker():
     return FileResponse(
         "client/sw.js",
         media_type="application/javascript",
-        headers={"Service-Worker-Allowed": "/"},
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
     )
 
 

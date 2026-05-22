@@ -1,4 +1,5 @@
-const CACHE = 'zeus-v9';
+// ⚠ BUMP THIS on every deploy (format: zeus-YYYYMMDD or zeus-YYYYMMDD-N)
+const CACHE = 'zeus-20260522';
 const SHELL = ['/', '/manifest.json', '/icon.svg', '/icon-maskable.svg'];
 
 self.addEventListener('install', e => {
