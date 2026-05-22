@@ -363,7 +363,7 @@
 
   function finishBusy() {
     callBusy = false;
-    if (pendingSwUpdate && !callMode) { window.location.reload(); }
+    if (pendingSwUpdate && !callMode) { pendingSwUpdate = false; window.location.reload(); }
   }
 
   function setProcessing(on) {
@@ -545,7 +545,9 @@
       }
       if (isReconnecting) {
         $('resume-banner').classList.remove('show');
-        const ok = await startCall(true);
+        const autoResume = localStorage.getItem('zeus-auto-resume') === '1';
+        if (autoResume) localStorage.removeItem('zeus-auto-resume');
+        const ok = await startCall(autoResume ? false : true);
         if (!ok) $('resume-banner').classList.add('show');
       }
     } catch {} finally { clearTimeout(t); }
@@ -722,16 +724,20 @@
     callMode = false;
     releaseWakeLock();
     if (!pendingSwUpdate) localStorage.removeItem('zeus-call-active');
-    if (pendingSwUpdate) { window.location.reload(); return; }
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     if (callAnimId) { cancelAnimationFrame(callAnimId); callAnimId = null; }
     if (callSilTimer) { clearTimeout(callSilTimer); callSilTimer = null; }
-    if (callRecorder && callRecorder.state !== 'inactive') callRecorder.stop();
+    if (callRecorder && callRecorder.state !== 'inactive') {
+      callRecorder.ondataavailable = null;
+      callRecorder.onstop = null;
+      callRecorder.stop();
+    }
     if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
     if (callAudioCtx) { callAudioCtx.close().catch(() => {}); callAudioCtx = null; }
     callSpeaking = false;
     callBusy = false;
     callVoiceFrames = 0;
+    if (pendingSwUpdate) { window.location.reload(); return; }
     $('call-btn').classList.remove('active');
     $('call-btn').textContent = '📞 LLAMADA';
     dot.className = 'dot on';
@@ -818,12 +824,9 @@
     const tout = localStorage.getItem('zeus-txt-out');
     if (tin)  txtIn.textContent  = tin;
     if (tout) txtOut.textContent = tout;
-    const autoResume = localStorage.getItem('zeus-auto-resume') === '1';
-    if (autoResume) localStorage.removeItem('zeus-auto-resume');
     await poll();
     if (!callMode && localStorage.getItem('zeus-call-active') === '1') {
-      if (autoResume) startCall();
-      else $('resume-banner').classList.add('show');
+      $('resume-banner').classList.add('show');
     }
   }
 
@@ -851,7 +854,7 @@
       }
     });
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
-      setInterval(() => reg.update(), 5000);
+      setInterval(() => reg.update(), 300000);
     }).catch(() => {});
   }
 </script>

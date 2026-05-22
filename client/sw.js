@@ -1,4 +1,4 @@
-const CACHE = 'zeus-v8';
+const CACHE = 'zeus-v9';
 const SHELL = ['/', '/manifest.json', '/icon.svg', '/icon-maskable.svg'];
 
 self.addEventListener('install', e => {
@@ -18,7 +18,7 @@ self.addEventListener('activate', e => {
 });
 
 // API paths that must always go to network
-const API_PATHS = ['/voz', '/estado', '/activar', '/desactivar', '/siguiente/', '/tarea-actual'];
+const API_PATHS = ['/voz', '/siguiente/', '/tarea-actual', '/texto'];
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
