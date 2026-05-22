@@ -1089,7 +1089,7 @@
 
   async function checkAlerts() {
     try {
-      const r = await fetch('/alerta');
+      const r = await fetch(server() + '/alerta');
       if (!r.ok) return;
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('audio')) return;
