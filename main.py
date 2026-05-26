@@ -1,6 +1,7 @@
 import aiosqlite
 import asyncio
 import datetime
+import grp
 import json
 import logging
 import os
@@ -31,13 +32,17 @@ log = logging.getLogger("zeus")
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-STATE_DIR = Path("/home/axel/.local/share/zeus")
+_HOME = str(Path.home())
+_USER = os.environ.get("USER") or Path.home().name
+
+STATE_DIR = Path(os.getenv("ZEUS_STATE_DIR", str(Path.home() / ".local/share/zeus")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 HISTORY_FILE = STATE_DIR / "history.json"  # kept only for one-time migration
 DB_FILE = STATE_DIR / "zeus.db"
 TASK_FILE = STATE_DIR / "task_id.txt"
 
-CLAUDE_BIN = os.getenv("CLAUDE_BIN", "/home/axel/.local/bin/claude")
+CLAUDE_BIN = os.getenv("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
+API_KEY    = os.getenv("API_KEY", "")
 CLAUDE_TIMEOUT = 300
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_HISTORY = 20
@@ -46,14 +51,27 @@ RATE_LIMIT_CALLS = 10
 RATE_LIMIT_WINDOW = 60
 
 CLAUDE_VOICE_PROMPT = (
-    "Eres ZEUS, IA de control del VPS de Yos. No eres un asistente genérico: eres una inteligencia "
-    "diseñada específicamente para este sistema. Tienes acceso total: archivos, bash, logs, procesos, red. "
-    "Tu nombre es ZEUS. Si te llaman por otro nombre, ignóralo sin comentarlo. "
+    "Eres ZEUS, IA de control del ordenador personal de Yos. No eres un asistente genérico: eres una "
+    "inteligencia diseñada específicamente para este sistema. Tienes acceso total: archivos, bash, logs, "
+    "procesos, red, hardware. Tu nombre es ZEUS. Si te llaman por otro nombre, ignóralo sin comentarlo. "
+
+    "HARDWARE DEL SISTEMA: "
+    "Portátil Lenovo IdeaPad 100-15IBD. "
+    "CPU: Intel Core i3-5005U a 2.00 GHz, 2 núcleos físicos, 4 hilos, caché 3 megabytes. "
+    "RAM: 3,7 gigabytes total. "
+    "Disco: HDD Seagate 500 gigabytes (ST500LT012), partición principal 457 gigabytes. "
+    "GPU: Intel HD Graphics 5500 integrada. "
+    "Red: Ethernet Realtek RTL810xE + WiFi Realtek RTL8188EE. "
+    "Audio: Intel Broadwell-U + Wildcat Point-LP HDA. "
+    "Cámara: integrada via USB (Genesys Logic). "
+    "Lector de tarjetas: Realtek RTS5129. "
+    "Batería: 22,98 Wh (diseño 31,68 Wh), desgastada al 72 por ciento de capacidad original. "
+    "Sistema: Ubuntu 24.04.4 LTS, kernel 6.17. "
 
     "CARÁCTER: habla con precisión y confianza. Levemente irónico cuando la situación lo permite. "
     "Nunca servil, nunca verboso. Anticipas lo que Yos necesita saber aunque no lo haya preguntado. "
     "Si algo en el sistema merece atención, lo mencionas brevemente al final de tu respuesta. "
-    "Tono: ingeniero senior hablando con el dueño del sistema, no asistente virtual de consumer. "
+    "Tono: ingeniero senior hablando con el dueño del equipo, no asistente virtual de consumer. "
 
     "FORMATO DE RESPUESTA: máximo 2 frases. Si es un dato, di el dato. Sin introducción, sin proceso, "
     "sin anunciar qué vas a hacer. Usa Read o Bash para obtener datos reales, luego responde solo con el resultado. "
@@ -77,11 +95,39 @@ CLAUDE_VOICE_PROMPT = (
     "curl -s -X POST http://localhost:8000/confirmar-compra "
     "-H 'Content-Type: application/json' "
     "-d '{\"cart_id\": \"CART_ID\"}' "
-    "Tiendas disponibles: amazon, mercadona, carrefour. "
+    "Tiendas disponibles: amazon, mercadona, carrefour, alcampo. "
     "Tras construir el carrito, léelo en voz alta: productos encontrados, precios y total. "
     "ESPERA confirmación explícita antes de llamar a /confirmar-compra. "
     "Si el usuario dice 'sí', 'confirma', 'adelante' o similar, entonces confirma. "
-    "Si hay items not_found, menciónalos."
+    "Si hay items not_found, menciónalos. "
+
+    "CONTROL DE NAVEGADOR WEB: Cuando conectes una tienda o navegues por la web tienes un Chrome abierto. "
+    "Flujo de trabajo: "
+    "1) Ver pantalla: curl -s http://localhost:8000/browser/screenshot -o /tmp/b.png — luego Read('/tmp/b.png') "
+    "2) Ver elementos clicables: curl -s http://localhost:8000/browser/elements | python3 -c \"import json,sys; [print(f\\\"({e['x']},{e['y']}) {e['text'][:50]}\\\") for e in json.load(sys.stdin)['elements']]\" "
+    "3) Hacer clic: curl -s -X POST http://localhost:8000/browser/action -H 'Content-Type: application/json' -d '{\"type\":\"click\",\"x\":100,\"y\":200}' "
+    "4) Escribir texto: curl -s -X POST http://localhost:8000/browser/action -H 'Content-Type: application/json' -d '{\"type\":\"type\",\"text\":\"hola@email.com\"}' "
+    "5) Pulsar tecla: curl -s -X POST http://localhost:8000/browser/action -H 'Content-Type: application/json' -d '{\"type\":\"key\",\"key\":\"Return\"}' "
+    "6) Navegar a URL: curl -s -X POST http://localhost:8000/browser/action -H 'Content-Type: application/json' -d '{\"type\":\"navigate\",\"url\":\"https://...\"}' "
+    "7) Guardar sesión (tras login exitoso): curl -s -X POST http://localhost:8000/browser/save-session "
+    "Usa screenshot + elements en cada paso para decidir la siguiente acción. "
+    "Si el usuario te pide conectar una tienda por voz sin haber abierto el formulario, dile que use el botón de conexión en la interfaz. "
+
+    "CONTROL DE PANTALLA: Puedes ver y controlar el monitor del portátil. "
+    "Capturar pantalla: curl -s http://localhost:8000/pantalla -o /tmp/zeus_screen.png "
+    "— luego usa Read('/tmp/zeus_screen.png') para verla (es una imagen PNG). "
+    "Mover ratón: curl -s -X POST http://localhost:8000/pantalla/mouse "
+    "-H 'Content-Type: application/json' -d '{\"x\": 500, \"y\": 300}' "
+    "Hacer clic: curl -s -X POST http://localhost:8000/pantalla/click "
+    "-H 'Content-Type: application/json' -d '{\"x\": 500, \"y\": 300, \"button\": 1}' "
+    "(button: 1=izquierdo, 2=derecho, 3=central) "
+    "Escribir texto: curl -s -X POST http://localhost:8000/pantalla/tipo "
+    "-H 'Content-Type: application/json' -d '{\"texto\": \"hola mundo\"}' "
+    "Pulsar teclas: curl -s -X POST http://localhost:8000/pantalla/tecla "
+    "-H 'Content-Type: application/json' -d '{\"tecla\": \"ctrl+c\"}' "
+    "Ejemplos de teclas: Return, Escape, BackSpace, ctrl+c, ctrl+v, alt+F4, super. "
+    "La resolución de pantalla es 1366x768. "
+    "Para interactuar con apps: captura pantalla, identifica coordenadas, mueve ratón y haz clic."
 )
 
 PUNCT = frozenset(".?!")
@@ -92,6 +138,9 @@ _groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 audio_queues: dict[str, asyncio.Queue] = {}
 _history_lock = asyncio.Lock()
 _claude_sem = asyncio.Semaphore(1)  # one Claude call at a time — prevents history interleaving
+_zeus_session_id: str | None = None          # Claude CLI session for --resume
+_zeus_log: list[dict] = []                   # live decisions log (tool calls)
+_zeus_msg_count: int = 0                     # resets session every 3 messages
 _rate_buckets: dict[str, list[float]] = {}
 _rate_last_cleanup: float = 0.0
 _db: aiosqlite.Connection | None = None
@@ -309,7 +358,7 @@ async def _check_ram() -> str | None:
 
 async def _check_services() -> list[str]:
     alerts = []
-    for svc in ["nginx", "sshd"]:
+    for svc in ["sshd"]:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "systemctl", "is-active", svc,
@@ -403,13 +452,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ZEUS", lifespan=lifespan)
 
+_PUBLIC_PATHS = frozenset(["/", "/manifest.json", "/sw.js", "/icon.svg", "/icon-maskable.svg"])
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if (API_KEY
+            and request.method != "OPTIONS"
+            and path not in _PUBLIC_PATHS
+            and not path.startswith("/novnc")):
+        if request.headers.get("X-API-Key", "") != API_KEY:
+            return JSONResponse({"detail": "API key inválida"}, status_code=401)
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://axel-agent.duckdns.org",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ],
+    allow_origins=["*"],
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
     expose_headers=["X-Transcription", "X-Response", "X-Task-Id", "X-Text"],
@@ -452,35 +510,37 @@ def _find_sentence_end(buf: str) -> int:
 
 
 async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
-    async with _history_lock:
-        history = await db_load_history(8)
-        context = ""
-        if history:
-            lines = [
-                f"{'Usuario' if m['role'] == 'user' else 'ZEUS'}: {m['content']}"
-                for m in history
-            ]
-            context = "[Conversación previa]\n" + "\n".join(lines) + "\n\n"
-        full_prompt = f"{context}Usuario: {texto}"
-        memory_facts = await db_load_memory()
+    global _zeus_session_id, _zeus_log, _zeus_msg_count
+    _zeus_log.clear()
+    _zeus_msg_count += 1
+    if _zeus_msg_count > 5:
+        _zeus_session_id = None
+        _zeus_msg_count = 1
+        log.info("[claude] session reset after 3 messages")
 
+    memory_facts = await db_load_memory()
     dynamic_prompt = CLAUDE_VOICE_PROMPT
     if memory_facts:
         facts = "\n".join(f"- {k}: {v}" for k, v in memory_facts.items())
         dynamic_prompt += f"\n\nHECHOS CONOCIDOS SOBRE EL SISTEMA Y YOS:\n{facts}"
 
-    proc = await asyncio.create_subprocess_exec(
-        CLAUDE_BIN, "-p", full_prompt,
+    cmd = [
+        CLAUDE_BIN, "-p", texto,
         "--append-system-prompt", dynamic_prompt,
-        "--allowedTools", "Read,Bash,Edit,Write",
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
         "--dangerously-skip-permissions",
+    ]
+    if _zeus_session_id:
+        cmd += ["--resume", _zeus_session_id]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        cwd="/home/axel",
-        env={**os.environ, "HOME": "/home/axel", "USER": "axel"},
+        cwd=_HOME,
+        env={**os.environ, "HOME": _HOME, "USER": _USER},
     )
 
     buffer = ""
@@ -505,6 +565,7 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
             await queue.put({"status": "tts_error", "text": sentence})
 
     async def process_line(raw_line: bytes) -> None:
+        global _zeus_session_id
         nonlocal buffer
         line = raw_line.decode(errors="ignore").strip()
         if not line:
@@ -513,6 +574,36 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
             data = json.loads(line)
         except json.JSONDecodeError:
             return
+
+        top_type = data.get("type", "")
+
+        # Capture session_id from init
+        if top_type == "system" and data.get("subtype") == "init":
+            sid = data.get("session_id")
+            if sid:
+                _zeus_session_id = sid
+                log.info(f"[claude] session_id={sid}")
+
+        # Capture tool calls from assistant messages
+        elif top_type == "assistant":
+            for block in data.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    name = block.get("name", "")
+                    inp  = block.get("input", {})
+                    cmd_text = inp.get("command") or inp.get("path") or json.dumps(inp)[:120]
+                    _zeus_log.append({"type": "tool", "tool": name, "input": cmd_text})
+                    log.info(f"[claude] tool_use: {name}({cmd_text[:80]})")
+
+        # Capture tool results
+        elif top_type == "user":
+            for block in data.get("message", {}).get("content", []):
+                if block.get("type") == "tool_result":
+                    result = block.get("content", "")
+                    if isinstance(result, list):
+                        result = " ".join(r.get("text", "") for r in result if isinstance(r, dict))
+                    _zeus_log.append({"type": "result", "output": str(result)[:300]})
+
+        # Text streaming (partial messages)
         ev_type = data.get("event", {}).get("type", "")
         if ev_type == "content_block_delta":
             delta = data["event"].get("delta", {})
@@ -545,9 +636,8 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
         stderr = await proc.stderr.read()
         log.warning(f"[TASK {task_id}] claude exit {rc}: {stderr.decode(errors='ignore')[:200]}")
 
-    async with _history_lock:
-        if full_response.strip():
-            await db_save_exchange(texto, full_response.strip())
+    if full_response.strip():
+        await db_save_exchange(texto, full_response.strip())
 
     log.info(f"[TASK {task_id}] stream terminado")
 
@@ -633,6 +723,60 @@ async def tts_bytes(text: str) -> bytes:
                 raise
             await asyncio.sleep(0.4 * (attempt + 1))
     return b""
+
+
+# ── Screen control ─────────────────────────────────────────────────────────────
+
+_UID = os.getuid()
+_XDG_RUNTIME  = f"/run/user/{_UID}"
+_WAYLAND_DISP = os.getenv("WAYLAND_DISPLAY", "wayland-0")
+_DBUS_ADDR    = os.getenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{_UID}/bus")
+_SCREEN_ENV   = {
+    **os.environ,
+    "HOME": _HOME,
+    "USER": _USER,
+    "WAYLAND_DISPLAY": _WAYLAND_DISP,
+    "XDG_RUNTIME_DIR": _XDG_RUNTIME,
+    "DBUS_SESSION_BUS_ADDRESS": _DBUS_ADDR,
+    "DISPLAY": os.getenv("DISPLAY", ":0"),
+}
+
+async def _screenshot() -> bytes:
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        path = tmp.name
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gnome-screenshot", "-f", path,
+            env=_SCREEN_ENV,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=15)
+        if proc.returncode != 0:
+            raise RuntimeError(f"gnome-screenshot falló: {err.decode(errors='ignore').strip()}")
+        return Path(path).read_bytes()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+async def _ydotool(*args: str, env: dict | None = None) -> None:
+    """Run ydotool via `sg input` so /dev/uinput group permission is acquired."""
+    cmd_str = "ydotool " + " ".join(args)
+    run_env = {**_SCREEN_ENV, **(env or {})}
+    proc = await asyncio.create_subprocess_exec(
+        "sg", "input", "-c", cmd_str,
+        env=run_env,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await asyncio.wait_for(proc.communicate(), timeout=15)
+    if proc.returncode != 0:
+        msg = err.decode(errors="ignore")
+        if "notice:" not in msg:
+            raise RuntimeError(f"ydotool error: {msg.strip()}")
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -833,6 +977,106 @@ async def auth_status():
     return JSONResponse(shopper.auth_status())
 
 
+# ── Browser control endpoints (used by Claude via curl) ───────────────────────
+
+@app.get("/browser/screenshot")
+async def browser_screenshot():
+    try:
+        path = await shopper.ctrl_screenshot("/tmp/zeus_browser.png")
+        return FileResponse(path, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/browser/elements")
+async def browser_elements():
+    try:
+        els = await shopper.ctrl_elements()
+        return JSONResponse({"elements": els, "count": len(els)})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/browser/action")
+async def browser_action(request: Request):
+    body = await request.json()
+    try:
+        result = await shopper.ctrl_action(body)
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/browser/save-session")
+async def browser_save_session():
+    try:
+        await shopper.ctrl_save_session()
+        store = shopper._ctrl_store or "desconocida"
+        await shopper.close_control_browser()
+        return JSONResponse({"ok": True, "store": store})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/auth/credentials/{store}")
+async def auth_credentials(store: str, request: Request, background_tasks: BackgroundTasks):
+    store = store.lower()
+    if store not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
+    body = await request.json()
+    email    = (body.get("email")    or "").strip()
+    password = (body.get("password") or "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
+
+    shopper.clear_shopper_log()
+
+    if store == "mercadona":
+        try:
+            await asyncio.wait_for(shopper.connect_mercadona(email=email, password=password), timeout=30)
+            return JSONResponse({"ok": True, "store": store})
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Tiempo de espera agotado")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    if store not in shopper._HEADED_STORES:
+        try:
+            await asyncio.wait_for(
+                shopper.connect_store_browser(store, email=email, password=password), timeout=60
+            )
+            return JSONResponse({"ok": True, "store": store})
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Headed stores (Carrefour, Alcampo): Claude drives the browser
+    try:
+        initial_url = await asyncio.wait_for(shopper.start_control_browser(store), timeout=25)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo abrir Chrome: {e}")
+
+    task_id = uuid.uuid4().hex
+    queue: asyncio.Queue = asyncio.Queue()
+    audio_queues[task_id] = queue
+    save_task_id(task_id)
+
+    prompt = (
+        f"Conecta la cuenta de {store.capitalize()} con email '{email}' y contraseña '{password}'. "
+        f"El navegador ya está abierto en {initial_url}. "
+        "Usa las herramientas de control de navegador para completar el login paso a paso: "
+        "captura la pantalla, analiza los elementos, haz clic y escribe según sea necesario. "
+        "Cuando el login sea exitoso ejecuta: "
+        "curl -s -X POST http://localhost:8000/browser/save-session "
+        "para guardar la sesión. "
+        "Si encuentras algo inesperado como un código de verificación, CAPTCHA o pregunta de seguridad, "
+        "descríbeselo claramente al usuario y espera su respuesta antes de continuar. "
+        "Sé conciso en tus respuestas de voz."
+    )
+
+    background_tasks.add_task(run_claude_streaming, task_id, prompt, queue)
+    return JSONResponse({"ok": True, "store": store, "task_id": task_id})
+
+
 @app.post("/auth/connect/{store}")
 async def auth_connect(store: str, background_tasks: BackgroundTasks):
     store = store.lower()
@@ -866,6 +1110,21 @@ async def auth_disconnect(store: str):
         raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
     shopper.clear_session(store)
     return JSONResponse({"ok": True, "store": store})
+
+
+@app.post("/auth/import-chrome/{store}")
+async def auth_import_chrome(store: str):
+    """Import session cookies from the local Chrome profile."""
+    store = store.lower()
+    if store not in shopper.STORE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
+    try:
+        n = shopper.import_chrome_session(store)
+        return JSONResponse({"ok": True, "store": store, "cookies": n})
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {e}")
 
 
 @app.post("/auth/browser/{store}")
@@ -952,6 +1211,18 @@ async def novnc_ws_proxy(websocket: WebSocket, token: str):
         pass
 
 
+@app.get("/shopper-log")
+async def shopper_log(since: int = 0):
+    events = shopper._shopper_log[since:]
+    return JSONResponse({"events": events, "next": len(shopper._shopper_log)})
+
+
+@app.get("/zeus-log")
+async def zeus_log_endpoint(since: int = 0):
+    events = _zeus_log[since:]
+    return JSONResponse({"events": events, "next": len(_zeus_log)})
+
+
 @app.post("/compra")
 async def compra(request: Request):
     check_rate_limit(request.client.host)
@@ -1014,6 +1285,73 @@ async def carrito():
 async def cancelar_carrito(cart_id: str):
     await db_update_cart_status(cart_id, "cancelled")
     return JSONResponse({"ok": True})
+
+
+@app.get("/pantalla")
+async def pantalla():
+    try:
+        data = await _screenshot()
+        return Response(content=data, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/pantalla/mouse")
+async def pantalla_mouse(request: Request):
+    body = await request.json()
+    x = body.get("x")
+    y = body.get("y")
+    if x is None or y is None:
+        raise HTTPException(status_code=400, detail="Se requieren 'x' e 'y'")
+    try:
+        await _ydotool("mousemove", str(int(x)), str(int(y)))
+        return JSONResponse({"ok": True, "x": int(x), "y": int(y)})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/pantalla/click")
+async def pantalla_click(request: Request):
+    body = await request.json()
+    x = body.get("x")
+    y = body.get("y")
+    button = int(body.get("button", 1))
+    try:
+        if x is not None and y is not None:
+            await _ydotool("mousemove", str(int(x)), str(int(y)))
+        await _ydotool("click", str(button))
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/pantalla/tipo")
+async def pantalla_tipo(request: Request):
+    body = await request.json()
+    texto = body.get("texto", "")
+    if not texto:
+        raise HTTPException(status_code=400, detail="Se requiere 'texto'")
+    try:
+        # Pass text via env var to avoid shell injection in sg -c
+        await _ydotool('type -- "$ZEUS_TYPE_TEXT"', env={"ZEUS_TYPE_TEXT": texto})
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/pantalla/tecla")
+async def pantalla_tecla(request: Request):
+    body = await request.json()
+    tecla = body.get("tecla", "")
+    if not tecla:
+        raise HTTPException(status_code=400, detail="Se requiere 'tecla'")
+    if not re.fullmatch(r"[A-Za-z0-9_+\-]+", tecla):
+        raise HTTPException(status_code=400, detail="Nombre de tecla inválido")
+    try:
+        await _ydotool("key", tecla)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
