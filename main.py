@@ -1164,7 +1164,7 @@ async def novnc_ws_proxy(websocket: WebSocket, token: str):
         await websocket.close(code=4403)
         return
 
-    await websocket.accept(subprotocol="binary")
+    await websocket.accept(subprotocol=("binary" if "binary" in (websocket.scope.get("subprotocols") or []) else None))
 
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", shopper.VNC_PORT)
