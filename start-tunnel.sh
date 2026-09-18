@@ -1,5 +1,5 @@
 #!/bin/bash
-CLOUDFLARED="/home/axel/.npm/_npx/8a26fc3a61fe4212/node_modules/.bin/cloudflared"
+CLOUDFLARED="/usr/local/bin/cloudflared"
 LOG="/tmp/zeus-tunnel.log"
 
 $CLOUDFLARED tunnel --url http://localhost:8000 > "$LOG" 2>&1 &

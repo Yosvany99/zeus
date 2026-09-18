@@ -1,0 +1,16 @@
+[Unit]
+Description=ZEUS Cloudflare Tunnel
+After=network.target zeus.service
+Requires=zeus.service
+
+[Service]
+Type=simple
+User=yos99
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -26,6 +26,7 @@
 
     html, body {
       height: 100%;
+      height: 100dvh;
       background: var(--bg);
       color: var(--cyan);
       font-family: 'Courier New', monospace;
@@ -34,12 +35,11 @@
 
     .screen {
       height: 100%;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
-      padding: 16px;
-      padding-top: max(16px, env(safe-area-inset-top));
-      padding-bottom: max(24px, env(safe-area-inset-bottom));
-      gap: 12px;
+      padding: max(10px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+      gap: clamp(5px, 1.4vh, 12px);
     }
 
     /* ── Server row ── */
@@ -53,9 +53,9 @@
       background: var(--card);
       border: 1px solid var(--dim);
       color: var(--cyan);
-      padding: 10px 12px;
+      padding: clamp(6px, 1.2vh, 10px) 10px;
       font-family: inherit;
-      font-size: 13px;
+      font-size: clamp(11px, 3vw, 13px);
       border-radius: 8px;
       outline: none;
       min-width: 0;
@@ -65,9 +65,9 @@
       background: var(--dim);
       border: none;
       color: var(--cyan);
-      padding: 10px 14px;
+      padding: clamp(6px, 1.2vh, 10px) 12px;
       font-family: inherit;
-      font-size: 12px;
+      font-size: 11px;
       letter-spacing: 1px;
       border-radius: 8px;
       cursor: pointer;
@@ -81,7 +81,7 @@
       align-items: center;
       justify-content: center;
       gap: 8px;
-      padding: 6px 0;
+      padding: clamp(2px, 0.8vh, 6px) 0;
     }
     .dot {
       width: 10px; height: 10px;
@@ -102,14 +102,20 @@
 
     /* ── Mic button ── */
     .mic-wrap {
-      flex: 1;
+      flex: 1 1 0;
+      min-height: 90px;
       display: flex;
       align-items: center;
       justify-content: center;
+      position: relative;
+      z-index: 0;
     }
     .mic-btn {
-      width: min(240px, 60vw);
-      height: min(240px, 60vw);
+      width: min(160px, 42vw);
+      height: min(160px, 42vw);
+      max-width: 90%;
+      max-height: 90%;
+      aspect-ratio: 1;
       border-radius: 50%;
       background: var(--card);
       border: 3px solid var(--dim);
@@ -117,45 +123,46 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 8px;
       cursor: pointer;
       transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
       user-select: none;
       touch-action: none;
+      flex-shrink: 0;
     }
     .mic-btn:active,
     .mic-btn.pressed { transform: scale(0.93); }
-    .mic-btn.on   { border-color: var(--cyan);   box-shadow: 0 0 30px rgba(0,212,255,0.25); }
-    .mic-btn.rec  { border-color: var(--green);  box-shadow: 0 0 40px rgba(0,255,153,0.35); }
-    .mic-btn.call { border-color: var(--orange); box-shadow: 0 0 30px rgba(255,153,0,0.2); }
-    .mic-icon { font-size: clamp(52px, 14vw, 72px); line-height: 1; }
+    .mic-btn.on   { border-color: var(--cyan);   box-shadow: 0 0 20px rgba(0,212,255,0.22); }
+    .mic-btn.rec  { border-color: var(--green);  box-shadow: 0 0 26px rgba(0,255,153,0.30); }
+    .mic-btn.call { border-color: var(--orange); box-shadow: 0 0 20px rgba(255,153,0,0.18); }
+    .mic-icon { font-size: clamp(26px, 7.5vw, 42px); line-height: 1; }
     .mic-hint {
-      font-size: clamp(9px, 2.5vw, 11px);
+      font-size: clamp(8px, 2.2vw, 11px);
       letter-spacing: 2px;
       color: var(--dim);
       text-transform: uppercase;
     }
 
     /* ── Transcript cards ── */
-    .cards { display: flex; flex-direction: column; gap: 8px; }
+    .cards { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
     .card {
       background: var(--card);
       border: 1px solid var(--dim);
       border-radius: 10px;
-      padding: 10px 14px;
+      padding: clamp(7px, 1.2vh, 10px) 12px;
     }
     .card-label {
       font-size: 9px;
       letter-spacing: 3px;
       color: var(--dim);
       text-transform: uppercase;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
     .card-text {
-      font-size: clamp(13px, 3.5vw, 15px);
+      font-size: clamp(12px, 3.2vw, 15px);
       line-height: 1.4;
-      min-height: 20px;
-      max-height: 5.6em;
+      min-height: 18px;
+      max-height: clamp(2.8em, 8vh, 5.6em);
       overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: var(--dim) transparent;
@@ -165,13 +172,13 @@
     .metrics {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
+      gap: 5px;
     }
     .metric {
       background: var(--card);
       border: 1px solid var(--dim);
       border-radius: 8px;
-      padding: 7px 10px;
+      padding: clamp(4px, 0.9vh, 7px) 8px;
     }
     .metric-label {
       font-size: 8px;
@@ -183,7 +190,7 @@
       height: 3px;
       background: var(--dim);
       border-radius: 2px;
-      margin: 4px 0 3px;
+      margin: 3px 0;
       overflow: hidden;
     }
     .metric-fill {
@@ -195,20 +202,20 @@
     .metric-fill.warn  { background: var(--orange); }
     .metric-fill.crit  { background: var(--red); }
     .metric-val {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--cyan);
     }
 
     /* ── Call button ── */
     .call-btn {
       width: 100%;
-      padding: 14px;
+      padding: clamp(10px, 1.8vh, 14px);
       border-radius: 10px;
       border: 2px solid var(--dim);
       background: var(--card);
       color: var(--cyan);
       font-family: inherit;
-      font-size: 13px;
+      font-size: clamp(11px, 3vw, 13px);
       letter-spacing: 3px;
       text-transform: uppercase;
       cursor: pointer;
@@ -221,13 +228,13 @@
     .resume-banner {
       display: none;
       width: 100%;
-      padding: 14px;
+      padding: clamp(10px, 1.8vh, 14px);
       border-radius: 10px;
       border: 2px solid var(--orange);
       background: var(--card);
       color: var(--orange);
       font-family: inherit;
-      font-size: 12px;
+      font-size: clamp(10px, 2.8vw, 12px);
       letter-spacing: 2px;
       text-transform: uppercase;
       cursor: pointer;
@@ -277,21 +284,21 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
-      padding: 8px 4px;
+      gap: 3px;
+      padding: clamp(5px, 1vh, 8px) 4px;
       border-radius: 10px;
       border: 1px solid var(--dim);
       background: var(--card);
       color: var(--dim);
       font-family: inherit;
-      font-size: 9px;
-      letter-spacing: 1.5px;
+      font-size: clamp(8px, 2.2vw, 9px);
+      letter-spacing: 1px;
       text-transform: uppercase;
       cursor: pointer;
       transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
       position: relative;
     }
-    .store-btn .store-icon { font-size: 20px; line-height: 1; }
+    .store-btn .store-icon { font-size: clamp(16px, 5vw, 20px); line-height: 1; }
     .store-btn.connected {
       border-color: var(--green);
       color: var(--green);
@@ -307,6 +314,17 @@
       color: var(--red);
     }
     .store-btn:active { opacity: 0.7; }
+
+    /* ── Responsive breakpoints ── */
+    @media (max-height: 700px) {
+      /* Metrics in single row to save vertical space */
+      .metrics { grid-template-columns: repeat(4, 1fr); }
+    }
+    @media (max-height: 560px) {
+      /* Hide metrics entirely on very small screens */
+      .metrics { display: none; }
+    }
+
     .store-status-dot {
       position: absolute;
       top: 6px; right: 8px;
@@ -371,8 +389,8 @@
     /* ── Text input button ── */
     .text-btn {
       position: absolute;
-      bottom: 14px;
-      right: 14px;
+      bottom: max(10px, 2vh);
+      right: max(10px, 3vw);
       width: 44px;
       height: 44px;
       border-radius: 50%;
@@ -385,6 +403,7 @@
       justify-content: center;
       cursor: pointer;
       transition: border-color 0.2s, box-shadow 0.2s;
+      touch-action: manipulation;
     }
     .text-btn:active { opacity: 0.7; }
     .text-btn:hover  { border-color: var(--cyan); box-shadow: 0 0 14px rgba(0,212,255,0.2); }
@@ -403,10 +422,11 @@
     .text-modal {
       width: 100%;
       max-width: 480px;
+      max-height: 80dvh;
       background: var(--card);
       border-top: 2px solid var(--cyan);
       border-radius: 16px 16px 0 0;
-      padding: 20px 16px 32px;
+      padding: 18px 16px max(20px, env(safe-area-inset-bottom));
       display: flex;
       flex-direction: column;
       gap: 12px;
@@ -455,19 +475,169 @@
     }
     .text-modal-actions button:active { opacity: 0.7; }
 
+    /* ── Credential modal ── */
+    .cred-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,16,0.82);
+      z-index: 200;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .cred-overlay.show { display: flex; }
+    .cred-modal {
+      width: 100%;
+      max-width: 480px;
+      max-height: 88dvh;
+      background: var(--card);
+      border-top: 2px solid var(--cyan);
+      border-radius: 16px 16px 0 0;
+      padding: 20px 16px max(24px, env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow: hidden;
+    }
+    .cred-store-name {
+      font-size: 13px;
+      letter-spacing: 4px;
+      color: var(--cyan);
+      text-transform: uppercase;
+      text-align: center;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--dim);
+    }
+    .cred-field { display: flex; flex-direction: column; gap: 5px; }
+    .cred-label {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .cred-input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #0a0f1a;
+      border: 1px solid var(--dim);
+      border-radius: 8px;
+      color: var(--cyan);
+      font-family: inherit;
+      font-size: 15px;
+      padding: 11px 12px;
+      outline: none;
+    }
+    .cred-input:focus { border-color: var(--cyan); }
+    .cred-error {
+      font-size: 11px;
+      color: var(--red);
+      min-height: 15px;
+      letter-spacing: 0.5px;
+      text-align: center;
+    }
+    .cred-actions { display: flex; gap: 10px; margin-top: 2px; }
+    .cred-actions button {
+      flex: 1;
+      padding: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--dim);
+      background: #0a0f1a;
+      color: var(--cyan);
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .cred-submit { border-color: var(--cyan) !important; background: rgba(0,212,255,0.08) !important; }
+    .cred-actions button:active { opacity: 0.7; }
+    .cred-actions button:disabled { opacity: 0.35; pointer-events: none; }
+    .cred-spinner {
+      display: none;
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 3px;
+      color: var(--dim);
+    }
+    .cred-spinner.show { display: block; }
+    .cred-spinner span { animation: blink 1s infinite; }
+    .cred-spinner span:nth-child(2) { animation-delay: .33s; }
+    .cred-spinner span:nth-child(3) { animation-delay: .66s; }
+
+    /* Zeus decisions panel */
+    #zeus-decisions {
+      display: none;
+      flex-direction: column;
+      flex-shrink: 0;
+      gap: 2px;
+      max-height: 110px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid rgba(0,212,255,0.15);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 10px;
+      font-family: monospace;
+    }
+    #zeus-decisions.show { display: flex; }
+    .zdec-line { display: flex; gap: 6px; align-items: flex-start; line-height: 1.5; }
+    .zdec-tool { color: #ffd080; flex-shrink: 0; }
+    .zdec-input { color: rgba(0,212,255,0.7); flex: 1; word-break: break-all; }
+    .zdec-result { color: rgba(0,212,255,0.4); flex: 1; word-break: break-all; font-style: italic; }
+
+    /* Vision log panel */
+    #cred-log {
+      display: none;
+      flex: 1 1 auto;
+      min-height: 140px;
+      max-height: 52vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(0,212,255,0.25);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--cyan);
+      gap: 4px;
+      flex-direction: column;
+    }
+    #cred-log.show { display: flex; }
+    .clog-line { display: flex; gap: 6px; align-items: flex-start; line-height: 1.5; }
+    .clog-icon { flex-shrink: 0; width: 16px; text-align: center; }
+    .clog-text { flex: 1; word-break: break-word; }
+    .clog-scan { color: rgba(0,212,255,0.55); font-size: 10px; }
+    .clog-decision { color: #a0ffb0; }
+    .clog-done { color: #50ff80; font-weight: bold; }
+    .clog-error { color: var(--red); }
+    .clog-step-start { color: rgba(0,212,255,0.4); font-size: 10px; border-top: 1px solid rgba(0,212,255,0.1); padding-top: 4px; margin-top: 2px; }
+
   </style>
 </head>
 <body>
 <div class="screen">
 
   <div class="server-row">
-    <input id="url" type="url" placeholder="https://axel-agent.duckdns.org" autocomplete="off" spellcheck="false" />
+    <input id="url" type="url" placeholder="https://tu-dominio.com" autocomplete="off" spellcheck="false" />
     <button onclick="saveUrl()">OK</button>
+  </div>
+  <div class="server-row">
+    <input id="apikey" type="password" placeholder="API Key" autocomplete="off" spellcheck="false" />
+    <button onclick="saveApiKey()">🔑</button>
+  </div>
+  <div class="server-row">
+    <select id="salida" onchange="saveSalida()" style="flex:1;background:var(--card);border:1px solid var(--dim);color:var(--cyan);padding:clamp(6px,1.2vh,10px) 10px;font-family:inherit;font-size:clamp(11px,3vw,13px);border-radius:8px;outline:none;min-width:0;">
+      <option value="screen">Salida: pantalla del portátil</option>
+      <option value="novnc">Salida: visor en la app</option>
+    </select>
   </div>
 
   <div class="status-row">
     <div class="dot on" id="dot"></div>
     <span class="status-label" id="slabel">LISTO</span>
+    <span id="ver-badge" style="margin-left:auto;font-size:9px;letter-spacing:1px;color:var(--dim);cursor:default;" title="Versión activa"></span>
   </div>
 
   <div class="metrics" id="metrics-panel">
@@ -513,9 +683,14 @@
       <span class="store-icon">🏪</span>
       <span>Carrefour</span>
     </button>
+    <button class="store-btn" id="store-alcampo" onclick="connectStore('alcampo')" title="Conectar Alcampo">
+      <div class="store-status-dot"></div>
+      <span class="store-icon">🧺</span>
+      <span>Alcampo</span>
+    </button>
   </div>
 
-  <div class="mic-wrap" style="position:relative;">
+  <div class="mic-wrap">
     <div class="mic-btn on" id="btn"
       ontouchstart="startRec(event)" ontouchend="stopRec(event)"
       onmousedown="startRec(event)" onmouseup="stopRec(event)"
@@ -527,15 +702,49 @@
     <button class="text-btn" onclick="openTextModal()" title="Escribir mensaje">⌨️</button>
   </div>
 
+  <div class="cred-overlay" id="cred-overlay" onclick="closeCredModal(event)">
+    <div class="cred-modal">
+      <div class="cred-store-name" id="cred-store-name">CONECTAR TIENDA</div>
+      <div id="cred-chrome-msg" style="display:none; font-size:12px; line-height:1.6; color:var(--cyan); letter-spacing:0.5px;">
+        Se abrirá Chrome en tu pantalla.<br>
+        Zeus entrará automáticamente con tus credenciales.<br>
+        Podrás ver todo el proceso en directo.
+      </div>
+      <div id="cred-fields">
+        <div class="cred-field">
+          <div class="cred-label">Email</div>
+          <input class="cred-input" type="email" id="cred-email" placeholder="tu@email.com"
+                 autocomplete="email" onkeydown="credKeydown(event)" />
+        </div>
+        <div class="cred-field">
+          <div class="cred-label">Contraseña</div>
+          <input class="cred-input" type="password" id="cred-password" placeholder="••••••••"
+                 autocomplete="current-password" onkeydown="credKeydown(event)" />
+        </div>
+      </div>
+      <div class="cred-error" id="cred-error"></div>
+      <div class="cred-spinner" id="cred-spin">CONECTANDO<span>.</span><span>.</span><span>.</span></div>
+      <div id="cred-log"></div>
+      <div id="cred-code-section" style="display:none; flex-direction:column; gap:8px;">
+        <div class="cred-label">Código de verificación</div>
+        <input class="cred-input" type="text" id="cred-code" placeholder="000000"
+               autocomplete="one-time-code" inputmode="numeric"
+               onkeydown="codeKeydown(event)" />
+      </div>
+      <div class="cred-actions">
+        <button onclick="closeCredModal()">Cancelar</button>
+        <button class="cred-submit" id="cred-submit" onclick="handleCredSubmit()">Conectar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="novnc-overlay" id="novnc-overlay">
     <div class="novnc-header">
-      <div>
-        <div class="novnc-title" id="novnc-title">CONECTAR TIENDA</div>
-        <div class="novnc-hint">Inicia sesión en el navegador</div>
-      </div>
-      <button class="novnc-close" onclick="closeNovncModal()">✕ CANCELAR</button>
+      <span class="novnc-title">ZEUS · NAVEGADOR EN VIVO</span>
+      <span class="novnc-hint">Claude está operando…</span>
+      <button class="novnc-close" onclick="closeNoVNC()">Cerrar</button>
     </div>
-    <iframe class="novnc-frame" id="novnc-frame" src="about:blank"></iframe>
+    <iframe class="novnc-frame" id="novnc-frame" allow="clipboard-read; clipboard-write"></iframe>
   </div>
 
   <div class="text-modal-overlay" id="text-modal-overlay" onclick="closeTextModal(event)">
@@ -551,6 +760,8 @@
 
   <div class="spinner" id="spin">PROCESANDO<span>.</span><span>.</span><span>.</span></div>
 
+  <div id="zeus-decisions"></div>
+
   <div class="cards">
     <div class="card">
       <div class="card-label">Tú</div>
@@ -565,8 +776,31 @@
 </div>
 
 <script>
+  let _activeHash = null;
+
+  async function loadVersion() {
+    try {
+      const r = await zeusF(server() + '/version');
+      if (!r.ok) return;
+      const { hash } = await r.json();
+      _activeHash = hash;
+      $('ver-badge').textContent = hash;
+      $('ver-badge').style.color = 'var(--dim)';
+      $('ver-badge').title = 'Versión activa: ' + hash;
+    } catch {}
+  }
+
+  function markUpdatePending() {
+    const badge = $('ver-badge');
+    badge.textContent = (_activeHash || '?') + ' ↑';
+    badge.style.color = 'var(--orange)';
+    badge.title = 'Actualización pendiente';
+  }
+
   let recorder = null, chunks = [], recording = false;
-  let thinkingCtx = null;
+  let thinkingCtx = null, thinkingMaster = null;
+  let _decPoll = null, _decCursor = 0;
+  let _vadBlockUntil = 0;
   let mediaSessionAudio = null, mediaSessionReady = false;
   let wakeLock = null;
   let pollTimer = null;
@@ -574,6 +808,7 @@
 
   function finishBusy() {
     callBusy = false;
+    if (pendingSwUpdate && callMode) { stopCall(); return; }
     if (pendingSwUpdate && !callMode) { pendingSwUpdate = false; window.location.reload(); }
   }
 
@@ -647,13 +882,13 @@
   function playResponseSound()     { _playTones([{freq:880,start:0,dur:0.07},{freq:1100,start:0.08,dur:0.08}], 0.2); }
 
   function startThinkingSound() {
+    stopThinkingSound();
     try {
       thinkingCtx = new AudioContext();
-      const master = thinkingCtx.createGain();
-      master.gain.value = 0.07;
-      master.connect(thinkingCtx.destination);
+      thinkingMaster = thinkingCtx.createGain();
+      thinkingMaster.gain.value = 0.07;
+      thinkingMaster.connect(thinkingCtx.destination);
 
-      // Sawtooth → bandpass → tremolo: slow synthetic scanner
       const osc    = thinkingCtx.createOscillator();
       const filter = thinkingCtx.createBiquadFilter();
       const trem   = thinkingCtx.createGain();
@@ -666,16 +901,59 @@
       lfoG.gain.value = 0.55; trem.gain.value = 0.5;
 
       lfo.connect(lfoG); lfoG.connect(trem.gain);
-      osc.connect(filter); filter.connect(trem); trem.connect(master);
+      osc.connect(filter); filter.connect(trem); trem.connect(thinkingMaster);
       lfo.start(); osc.start();
     } catch {}
   }
 
   function stopThinkingSound() {
     if (thinkingCtx) {
-      thinkingCtx.close().catch(() => {});
-      thinkingCtx = null;
+      try {
+        if (thinkingMaster) {
+          thinkingMaster.gain.setValueAtTime(0, thinkingCtx.currentTime);
+          thinkingMaster = null;
+        }
+        const ctx = thinkingCtx;
+        thinkingCtx = null;
+        setTimeout(() => ctx.close().catch(() => {}), 60);
+      } catch {}
     }
+  }
+
+  // ── Zeus decisions log ────────────────────────────────────────────────────────
+
+  function _startDecPoll() {
+    _decCursor = 0;
+    $('zeus-decisions').innerHTML = '';
+    $('zeus-decisions').classList.add('show');
+    _decPoll = setInterval(async () => {
+      try {
+        const r = await zeusF(server() + '/zeus-log?since=' + _decCursor);
+        if (!r.ok) return;
+        const d = await r.json();
+        d.events.forEach(e => {
+          const el = document.createElement('div');
+          el.className = 'zdec-line';
+          if (e.type === 'tool') {
+            const za = document.createElement('span'); za.className = 'zdec-tool'; za.textContent = `[${e.tool}]`;
+            const zb = document.createElement('span'); zb.className = 'zdec-input'; zb.textContent = e.input || '';
+            el.append(za, zb);
+          } else if (e.type === 'result') {
+            const za = document.createElement('span'); za.className = 'zdec-tool'; za.textContent = '  →';
+            const zb = document.createElement('span'); zb.className = 'zdec-result'; zb.textContent = e.output || '';
+            el.append(za, zb);
+          }
+          $('zeus-decisions').appendChild(el);
+          $('zeus-decisions').scrollTop = $('zeus-decisions').scrollHeight;
+        });
+        _decCursor = d.next;
+      } catch {}
+    }, 600);
+  }
+
+  function _stopDecPoll() {
+    if (_decPoll) { clearInterval(_decPoll); _decPoll = null; }
+    $('zeus-decisions').classList.remove('show');
   }
 
   // ── HUD canvas animation ──────────────────────────────────────────────────────
@@ -788,8 +1066,63 @@
   }
 
   // Load saved URL
-  const DEFAULT_URL = 'https://axel-agent.duckdns.org';
+  const DEFAULT_URL = window.location.origin;
   urlIn.value = localStorage.getItem('j-url') || DEFAULT_URL;
+
+  // ── API key helper ─────────────────────────────────────────────────────────────
+  function zeusF(url, opts = {}) {
+    const k = localStorage.getItem('zeus-api-key') || '';
+    if (k) opts.headers = { 'X-API-Key': k, ...(opts.headers || {}) };
+    return fetch(url, opts);
+  }
+
+  function saveApiKey() {
+    const val = document.getElementById('apikey').value.trim();
+    if (val) localStorage.setItem('zeus-api-key', val);
+    document.getElementById('apikey').blur();
+  }
+
+  // Load saved API key
+  const savedKey = localStorage.getItem('zeus-api-key') || '';
+  if (savedKey) document.getElementById('apikey').value = savedKey;
+
+  // ── Salida (output) selector — ajuste global ──
+  function salida() { return localStorage.getItem('zeus-salida') || 'screen'; }
+  function saveSalida() { localStorage.setItem('zeus-salida', document.getElementById('salida').value); }
+  // The live browser opens in a SEPARATE window so ZEUS and the browser are
+  // visible at the same time. Popup blockers only allow window.open() from a
+  // user gesture, so we pre-open a blank window on the connect click and set
+  // its URL later (preopenNoVNC); the in-app overlay stays as a fallback.
+  let _novncWin = null;
+  const _NOVNC_FEATURES = 'width=980,height=760,menubar=no,toolbar=no,location=no,status=no';
+
+  function preopenNoVNC() {
+    try { _novncWin = window.open('about:blank', 'zeus-novnc', _NOVNC_FEATURES); }
+    catch (e) { _novncWin = null; }
+    return _novncWin;
+  }
+  function openNoVNC(url) {
+    const full = server().replace(/\/$/, '') + url;
+    try {
+      if (_novncWin && !_novncWin.closed) {
+        _novncWin.location.href = full;
+      } else {
+        _novncWin = window.open(full, 'zeus-novnc', _NOVNC_FEATURES);
+      }
+      if (_novncWin && !_novncWin.closed) { try { _novncWin.focus(); } catch (e) {} return; }
+    } catch (e) { /* fall through to overlay */ }
+    // Popup blocked → fall back to the in-app overlay (covers ZEUS, but works).
+    const f = document.getElementById('novnc-frame');
+    f.src = full;
+    document.getElementById('novnc-overlay').classList.add('show');
+  }
+  function closeNoVNC() {
+    if (_novncWin && !_novncWin.closed) { try { _novncWin.close(); } catch (e) {} }
+    _novncWin = null;
+    document.getElementById('novnc-overlay').classList.remove('show');
+    document.getElementById('novnc-frame').src = 'about:blank';
+  }
+  (function(){ const s = document.getElementById('salida'); if (s) s.value = salida(); })();
 
   // ── Text input modal ──
   function openTextModal() {
@@ -819,18 +1152,19 @@
     setProcessing(true);
 
     try {
-      const res = await fetch(server() + '/texto', {
+      const res = await zeusF(server() + '/texto', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texto }),
       });
       if (!res.ok) { setProcessing(false); return; }
       const data = await res.json();
-      setProcessing(false);
       if (data.task_id) {
         setTxtIn(data.transcripcion || texto);
         callBusy = true;
-        streamTask(data.task_id);
+        streamTask(data.task_id);  // streamTask's finally handles setProcessing(false)
+      } else {
+        setProcessing(false);
       }
     } catch (err) {
       setProcessing(false);
@@ -864,7 +1198,7 @@
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 5000);
     try {
-      const r = await fetch(s + '/tarea-actual', { signal: ctrl.signal });
+      const r = await zeusF(s + '/tarea-actual', { signal: ctrl.signal });
       if (!r.ok) return;
       const d = await r.json();
       if (d.task_id && !callBusy) {
@@ -923,12 +1257,13 @@
     const MAX_ATTEMPTS = 120;
 
     startThinkingSound();
+    _startDecPoll();
 
     async function fetchNext() {
       let attempts = 0;
       while (attempts++ < MAX_ATTEMPTS) {
         let r;
-        try { r = await fetch(server() + '/siguiente/' + taskId, {}); }
+        try { r = await zeusF(server() + '/siguiente/' + taskId, {}); }
         catch { return null; }
         if (!r.ok) return null;
         const ct = r.headers.get('content-type') || '';
@@ -975,6 +1310,7 @@
       }
     } finally {
       stopThinkingSound();
+      _stopDecPoll();
       if (callMode) {
         spin.classList.remove('show');
         dot.className = 'dot call';
@@ -984,14 +1320,8 @@
       } else {
         setProcessing(false);
       }
-      // Delay before re-enabling VAD — lets speaker audio decay so mic doesn't pick up echo
-      await new Promise(r => setTimeout(r, 1500));
-      if (callAnalyser) {
-        const echoBuf = new Float32Array(callAnalyser.fftSize);
-        callAnalyser.getFloatTimeDomainData(echoBuf);
-        const echoRms = Math.sqrt(echoBuf.reduce((s, v) => s + v * v, 0) / echoBuf.length);
-        if (echoRms > VAD_THRESHOLD) await new Promise(r => setTimeout(r, 500));
-      }
+      // Block VAD for 2.5s after Zeus speaks — prevents echo/speaker pickup
+      _vadBlockUntil = Date.now() + 2500;
       callVoiceFrames = 0;
       finishBusy();
     }
@@ -1006,7 +1336,7 @@
     const vozWarnTimer = setTimeout(() => { if (callMode) setTxtOut('Procesando…'); }, 10000);
     const vozTimer = setTimeout(() => vozCtrl.abort(), 30000);
     try {
-      const res = await fetch(server() + '/voz', { method: 'POST', body: form, signal: vozCtrl.signal });
+      const res = await zeusF(server() + '/voz', { method: 'POST', body: form, signal: vozCtrl.signal });
       clearTimeout(vozWarnTimer);
       if (res.ok) {
         const ct = res.headers.get('content-type') || '';
@@ -1017,7 +1347,7 @@
           if (!arrayBuf.byteLength) { setProcessing(false); finishBusy(); return; }
           const audioUrl = URL.createObjectURL(new Blob([arrayBuf], { type: 'audio/mpeg' }));
           const audioEl = new Audio(audioUrl);
-          audioEl.addEventListener('ended', finishBusy, { once: true });
+          audioEl.addEventListener('ended', () => { _vadBlockUntil = Date.now() + 2500; finishBusy(); }, { once: true });
           audioEl.addEventListener('error', finishBusy, { once: true });
           audioEl.play().catch(() => finishBusy());
           setProcessing(false);
@@ -1132,7 +1462,7 @@
 
     if (rms > VAD_THRESHOLD) {
       if (callSilTimer) { clearTimeout(callSilTimer); callSilTimer = null; }
-      if (!callSpeaking && !callBusy) {
+      if (!callSpeaking && !callBusy && Date.now() > _vadBlockUntil) {
         callVoiceFrames++;
         if (callVoiceFrames >= VAD_START_FRAMES) {
           callVoiceFrames = 0;
@@ -1217,7 +1547,7 @@
 
   async function updateMetrics() {
     try {
-      const r = await fetch(server() + '/metrics');
+      const r = await zeusF(server() + '/metrics');
       if (!r.ok) return;
       const d = await r.json();
       fillBar('m-cpu-bar',  'm-cpu-val',  d.cpu,      d.cpu + '% · load ' + d.load1);
@@ -1230,76 +1560,200 @@
 
   // ── Stores auth ──────────────────────────────────────────────────────────────
 
-  const STORES = ['mercadona', 'amazon', 'carrefour'];
-  let _novncStore = null, _novncPoller = null;
+  const STORES = ['mercadona', 'amazon', 'carrefour', 'alcampo'];
+  let _credStore = null;
+  let _shopperPoll = null;
+  let _shopperCursor = 0;
+
+  const STORE_LABELS = { mercadona: 'Mercadona', amazon: 'Amazon', carrefour: 'Carrefour', alcampo: 'Alcampo' };
+  // Stores that use visible Chrome on the user's display (Cloudflare-protected)
+  const HEADED_STORES = new Set(['carrefour', 'alcampo']);
+  // Stores that use Chrome cookie import instead of credential login (none currently)
+  const CHROME_IMPORT_STORES = new Set([]);
 
   function _setStoreState(store, state) {
     const btn = $('store-' + store);
     if (!btn) return;
     btn.className = 'store-btn' + (state ? ' ' + state : '');
-    const labels = { connected: 'Desconectar', connecting: 'Abriendo...', error: 'Reintentar', '': 'Conectar' };
-    btn.title = (labels[state] || 'Conectar') + ' ' + store.charAt(0).toUpperCase() + store.slice(1);
+    const labels = { connected: 'Desconectar', connecting: 'Conectando…', error: 'Reintentar', '': 'Conectar' };
+    btn.title = (labels[state] || 'Conectar') + ' ' + (STORE_LABELS[store] || store);
   }
 
   async function refreshStoreStatus() {
     try {
-      const r = await fetch(server() + '/auth/status');
+      const r = await zeusF(server() + '/auth/status');
       if (!r.ok) return;
       const data = await r.json();
       STORES.forEach(s => {
-        if (s !== _novncStore) {
-          _setStoreState(s, data[s] ? 'connected' : '');
-        }
+        if (s !== _credStore) _setStoreState(s, data[s] ? 'connected' : '');
       });
     } catch {}
   }
 
-  function openNovncModal(store, novncUrl) {
-    _novncStore = store;
-    $('novnc-title').textContent = 'LOGIN: ' + store.toUpperCase();
-    $('novnc-frame').src = novncUrl;
-    $('novnc-overlay').classList.add('show');
+  // ── Credential modal ──────────────────────────────────────────────────────────
 
-    if (_novncPoller) clearInterval(_novncPoller);
-    _novncPoller = setInterval(async () => {
+  function openCredModal(store) {
+    _credStore = store;
+    $('cred-store-name').textContent = 'CONECTAR ' + (STORE_LABELS[store] || store).toUpperCase();
+    $('cred-email').value = '';
+    $('cred-password').value = '';
+    $('cred-error').textContent = '';
+    $('cred-spin').classList.remove('show');
+    $('cred-submit').disabled = false;
+    $('cred-submit').textContent = HEADED_STORES.has(store) ? 'Abrir Chrome y conectar' : 'Conectar';
+    $('cred-chrome-msg').style.display = HEADED_STORES.has(store) ? 'block' : 'none';
+    $('cred-fields').style.display = 'block';
+    $('cred-overlay').classList.add('show');
+    setTimeout(() => $('cred-email').focus(), 120);
+  }
+
+  function handleCredSubmit() {
+    if (_credStore && CHROME_IMPORT_STORES.has(_credStore)) {
+      importChromeSession();
+    } else {
+      submitCredentials();
+    }
+  }
+
+  function _stopShopperPoll() {
+    if (_shopperPoll) { clearInterval(_shopperPoll); _shopperPoll = null; }
+  }
+
+  function _appendLog(d) {
+    if (d.type === 'need_code') {
+      $('cred-code-section').style.display = 'flex';
+      $('cred-submit').textContent = 'Enviar código';
+      $('cred-submit').disabled = false;
+      $('cred-submit').onclick = submitCode;
+      setTimeout(() => $('cred-code').focus(), 80);
+      // Surface it on the main HUD too: you can answer by voice or by typing,
+      // not only via the code box in the credentials modal.
+      try { setTxtOut('🔐 ' + (d.text || 'Código requerido') + ' — dilo o escríbelo'); } catch (e) {}
+      return;
+    }
+    const panel = $('cred-log');
+    panel.classList.add('show');
+    const line = document.createElement('div');
+    line.className = 'clog-line';
+    const cls = { scan: 'clog-scan', decision: 'clog-decision', done: 'clog-done', error: 'clog-error', step_start: 'clog-step-start' }[d.type] || '';
+    let icon = d.icon || '·';
+    let text = d.text || '';
+    if (d.type === 'scan') {
+      icon = '👁';
+      text = `${d.text}${d.url ? ' — ' + d.url.replace('https://','') : ''}`;
+    } else if (d.type === 'decision') {
+      icon = d.action === 'done' ? '✓' : d.action === 'click_text' ? '🖱' : d.action === 'type' ? '⌨' : d.action === 'back' ? '⬅' : '→';
+      const label = d.action === 'type' ? `"${d.text}"` : (d.target || d.action);
+      text = `<b>${d.action}</b>: ${label} — <i>${d.reason || ''}</i>`;
+    } else if (d.type === 'step_start') {
+      icon = '▶';
+    }
+    const ic=document.createElement('span');ic.className='clog-icon';ic.textContent=icon;const tx=document.createElement('span');tx.className='clog-text '+cls;tx.textContent=text;line.append(ic,tx);
+    panel.appendChild(line);
+    panel.scrollTop = panel.scrollHeight;
+  }
+
+  function _startShopperPoll() {
+    _stopShopperPoll();
+    _shopperCursor = 0;
+    $('cred-log').innerHTML = '';
+    $('cred-log').classList.add('show');
+    _shopperPoll = setInterval(async () => {
       try {
-        const r = await fetch(server() + '/auth/status');
+        const r = await zeusF(server() + '/shopper-log?since=' + _shopperCursor);
+        if (!r.ok) return;
         const d = await r.json();
-        if (d[store]) {
-          clearInterval(_novncPoller);
-          _novncPoller = null;
-          _setStoreState(store, 'connected');
-          _closeNovncOverlay();
-        }
+        d.events.forEach(e => _appendLog(e));
+        _shopperCursor = d.next;
       } catch {}
-    }, 3000);
+    }, 600);
+  }
 
-    // Auto-cancel after 6 minutes
-    setTimeout(() => {
-      if (_novncPoller) {
-        clearInterval(_novncPoller);
-        _novncPoller = null;
-        if (_novncStore === store) {
-          _setStoreState(store, 'error');
-          _closeNovncOverlay();
-        }
+  function closeCredModal(e) {
+    if (e && e.target !== $('cred-overlay')) return;
+    if ($('cred-submit').disabled && $('cred-code-section').style.display === 'none') return;
+    _stopShopperPoll();
+    $('cred-log').classList.remove('show');
+    $('cred-log').innerHTML = '';
+    $('cred-overlay').classList.remove('show');
+    $('cred-fields').style.display = 'block';
+    $('cred-chrome-msg').style.display = 'none';
+    $('cred-code-section').style.display = 'none';
+    $('cred-code').value = '';
+    $('cred-submit').textContent = 'Conectar';
+    $('cred-submit').onclick = handleCredSubmit;
+    if (_credStore) { _setStoreState(_credStore, ''); _credStore = null; }
+  }
+
+  function credKeydown(e) {
+    if (e.key === 'Enter') submitCredentials();
+    if (e.key === 'Escape') closeCredModal();
+  }
+
+  async function submitCredentials() {
+    const store = _credStore;
+    if (!store) return;
+    const email    = $('cred-email').value.trim();
+    const password = $('cred-password').value;
+    if (!email || !password) {
+      $('cred-error').textContent = 'Introduce email y contraseña';
+      return;
+    }
+
+    $('cred-submit').disabled = true;
+    $('cred-submit').textContent = 'Conectar';
+    $('cred-spin').classList.add('show');
+    $('cred-error').textContent = '';
+    _setStoreState(store, 'connecting');
+
+    if (HEADED_STORES.has(store)) _startShopperPoll();
+    // Pre-open the separate noVNC window now (within the click) so the popup
+    // blocker lets it through; openNoVNC() will point it at the URL afterwards.
+    if (HEADED_STORES.has(store) && salida() === 'novnc') preopenNoVNC();
+
+    try {
+      const r = await zeusF(server() + '/auth/credentials/' + store, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, salida: salida() }),
+      });
+      const data = await r.json();
+      _stopShopperPoll();
+      $('cred-spin').classList.remove('show');
+      if (!r.ok) {
+        $('cred-error').textContent = data.detail || 'Error al conectar';
+        $('cred-submit').disabled = false;
+        $('cred-submit').textContent = 'Reintentar';
+        _setStoreState(store, 'error');
+        return;
       }
-    }, 360000);
-  }
 
-  function _closeNovncOverlay() {
-    $('novnc-overlay').classList.remove('show');
-    $('novnc-frame').src = 'about:blank';
-    _novncStore = null;
-  }
+      // Headed stores: Claude drives the browser — close modal and stream the task
+      if (data.task_id) {
+        $('cred-log').classList.remove('show');
+        $('cred-log').innerHTML = '';
+        $('cred-overlay').classList.remove('show');
+        _credStore = null;
+        if (data.novnc_url) openNoVNC(data.novnc_url);
+        setProcessing(true);
+        streamTask(data.task_id);
+        // Status will update via refreshStoreStatus polling
+        return;
+      }
 
-  function closeNovncModal() {
-    const store = _novncStore;
-    if (_novncPoller) { clearInterval(_novncPoller); _novncPoller = null; }
-    _closeNovncOverlay();
-    if (store) {
-      _setStoreState(store, '');
-      fetch(server() + '/auth/browser', { method: 'DELETE' }).catch(() => {});
+      // Instant connect (Mercadona / headless stores)
+      _setStoreState(store, 'connected');
+      $('cred-log').classList.remove('show');
+      $('cred-log').innerHTML = '';
+      $('cred-overlay').classList.remove('show');
+      _credStore = null;
+    } catch {
+      _stopShopperPoll();
+      $('cred-spin').classList.remove('show');
+      $('cred-error').textContent = 'Sin respuesta del servidor';
+      $('cred-submit').disabled = false;
+      $('cred-submit').textContent = 'Reintentar';
+      _setStoreState(store, 'error');
     }
   }
 
@@ -1309,30 +1763,89 @@
 
     if (isConnected) {
       try {
-        await fetch(server() + '/auth/connect/' + store, { method: 'DELETE' });
+        await zeusF(server() + '/auth/connect/' + store, { method: 'DELETE' });
         _setStoreState(store, '');
       } catch { _setStoreState(store, 'error'); }
       return;
     }
 
+    openCredModal(store);
+  }
+
+  function openChromeImportModal(store) {
+    _credStore = store;
+    $('cred-store-name').textContent = 'CONECTAR ' + (STORE_LABELS[store] || store).toUpperCase();
+    $('cred-error').textContent = '';
+    $('cred-spin').classList.remove('show');
+    $('cred-submit').disabled = false;
+    $('cred-submit').textContent = 'Importar sesión';
+    // Hide email/password fields, show instructions
+    $('cred-fields').style.display = 'none';
+    $('cred-chrome-msg').style.display = 'block';
+    $('cred-overlay').classList.add('show');
+  }
+
+  async function importChromeSession() {
+    const store = _credStore;
+    if (!store) return;
+    $('cred-submit').disabled = true;
+    $('cred-spin').classList.add('show');
+    $('cred-error').textContent = '';
     _setStoreState(store, 'connecting');
-
-    if (store === 'mercadona') {
-      try {
-        const r = await fetch(server() + '/auth/connect/mercadona', { method: 'POST' });
-        const data = await r.json();
-        _setStoreState(store, (!r.ok || !data.ok) ? 'error' : 'connected');
-      } catch { _setStoreState(store, 'error'); }
-      return;
-    }
-
-    // Amazon / Carrefour: interactive browser via noVNC
     try {
-      const r = await fetch(server() + '/auth/browser/' + store, { method: 'POST' });
+      const r = await zeusF(server() + '/auth/import-chrome/' + store, { method: 'POST' });
       const data = await r.json();
-      if (!r.ok) { _setStoreState(store, 'error'); return; }
-      openNovncModal(store, data.novnc_url);
-    } catch { _setStoreState(store, 'error'); }
+      $('cred-spin').classList.remove('show');
+      if (r.ok && data.ok) {
+        _setStoreState(store, 'connected');
+        $('cred-overlay').classList.remove('show');
+        $('cred-fields').style.display = 'block';
+        $('cred-chrome-msg').style.display = 'none';
+        _credStore = null;
+      } else {
+        $('cred-error').textContent = data.detail || 'Error al importar';
+        $('cred-submit').disabled = false;
+        _setStoreState(store, 'error');
+      }
+    } catch {
+      $('cred-spin').classList.remove('show');
+      $('cred-error').textContent = 'Sin respuesta del servidor';
+      $('cred-submit').disabled = false;
+      _setStoreState(store, 'error');
+    }
+  }
+
+  async function submitCode() {
+    const store = _credStore;
+    if (!store) return;
+    const code = $('cred-code').value.trim();
+    if (!code) { $('cred-error').textContent = 'Introduce el código'; return; }
+    $('cred-submit').disabled = true;
+    $('cred-error').textContent = '';
+    try {
+      const r = await zeusF(server() + '/auth/code/' + store, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      if (!r.ok) {
+        $('cred-error').textContent = 'Error al enviar el código';
+        $('cred-submit').disabled = false;
+      } else {
+        $('cred-code-section').style.display = 'none';
+        $('cred-code').value = '';
+        $('cred-submit').textContent = 'Conectar';
+        $('cred-submit').onclick = handleCredSubmit;
+      }
+    } catch {
+      $('cred-error').textContent = 'Sin respuesta del servidor';
+      $('cred-submit').disabled = false;
+    }
+  }
+
+  function codeKeydown(e) {
+    if (e.key === 'Enter') submitCode();
+    if (e.key === 'Escape') closeCredModal();
   }
 
   async function init() {
@@ -1340,6 +1853,7 @@
     const tout = localStorage.getItem('zeus-txt-out');
     if (tin)  txtIn.textContent  = tin;
     if (tout) txtOut.textContent = tout;
+    loadVersion();
     await poll();
     if (!callMode && localStorage.getItem('zeus-call-active') === '1') {
       $('resume-banner').classList.add('show');
@@ -1354,7 +1868,7 @@
 
   async function checkAlerts() {
     try {
-      const r = await fetch(server() + '/alerta');
+      const r = await zeusF(server() + '/alerta');
       if (!r.ok) return;
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('audio')) return;
@@ -1389,15 +1903,16 @@
       if (swRefreshing) return;
       swRefreshing = true;
       pendingSwUpdate = true;
+      markUpdatePending();
       if (callMode) {
         localStorage.setItem('zeus-auto-resume', '1');
-        stopCall();
-      } else if (!callBusy) {
+        if (!callBusy && !callSpeaking) stopCall();
+      } else if (!callBusy && !callSpeaking) {
         window.location.reload();
       }
     });
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
-      setInterval(() => reg.update(), 300000);
+      setInterval(() => reg.update(), 30000);
     }).catch(() => {});
   }
 </script>

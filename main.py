@@ -1,11 +1,13 @@
 import aiosqlite
 import asyncio
 import datetime
-import grp
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -44,6 +46,9 @@ TASK_FILE = STATE_DIR / "task_id.txt"
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", str(Path.home() / ".local/bin/claude"))
 API_KEY    = os.getenv("API_KEY", "")
 CLAUDE_TIMEOUT = 300
+# Interactive store logins drive the browser and may wait for a human OTP,
+# so they need a much larger budget than a normal voice/text turn.
+LOGIN_TIMEOUT = 900
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_HISTORY = 20
 
@@ -132,6 +137,25 @@ CLAUDE_VOICE_PROMPT = (
 
 PUNCT = frozenset(".?!")
 
+_WHISPER_HALLUCINATIONS = frozenset([
+    "gracias", "gracias.", "sí", "sí.", "si", "si.", "no", "no.",
+    "hmm", "hmm.", "hm", "hm.", "mm", "mm.", "um", "uh", "ah", "eh",
+    "ok", "ok.", "okay", "bien", "bien.", "claro", "claro.", "vale", "vale.",
+    "subtítulos realizados por la comunidad de amara.org",
+    "gracias por ver el vídeo", "gracias por ver el video",
+    "gracias por vuestra atención", "gracias por su atención",
+    "suscríbete al canal",
+])
+
+def _is_noise_transcript(text: str) -> bool:
+    normalized = text.strip().lower()
+    if normalized in _WHISPER_HALLUCINATIONS:
+        return True
+    words = normalized.split()
+    if len(words) == 1 and len(normalized.rstrip(".,!?")) <= 6:
+        return True
+    return False
+
 # ── Globals ────────────────────────────────────────────────────────────────────
 
 _groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -140,7 +164,9 @@ _history_lock = asyncio.Lock()
 _claude_sem = asyncio.Semaphore(1)  # one Claude call at a time — prevents history interleaving
 _zeus_session_id: str | None = None          # Claude CLI session for --resume
 _zeus_log: list[dict] = []                   # live decisions log (tool calls)
-_zeus_msg_count: int = 0                     # resets session every 3 messages
+_zeus_msg_count: int = 0                     # resets session every 10 messages
+_last_prompt_hash: str | None = None         # MD5 of last dynamic_prompt sent; skip re-sending if unchanged
+_pending_context: str | None = None         # compact history snippet injected on first msg of new session
 _rate_buckets: dict[str, list[float]] = {}
 _rate_last_cleanup: float = 0.0
 _db: aiosqlite.Connection | None = None
@@ -446,6 +472,7 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await shopper.stop_browser_session()
+    await shopper.close_control_browser()
     if _db:
         await _db.close()
 
@@ -453,21 +480,46 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ZEUS", lifespan=lifespan)
 
 _PUBLIC_PATHS = frozenset(["/", "/manifest.json", "/sw.js", "/icon.svg", "/icon-maskable.svg"])
+_TRUSTED_PROXIES = frozenset(["127.0.0.1", "::1"])
+_FORWARD_HEADERS = ("x-forwarded-for", "x-real-ip", "cf-connecting-ip", "forwarded")
+
+
+def _is_external(request: Request) -> bool:
+    """True if the request arrived through nginx / the cloudflared tunnel.
+
+    Claude's own curl calls hit uvicorn directly from localhost with no
+    forwarding headers; the reverse proxy and the tunnel always add them.
+    Any socket peer that is not a trusted local proxy is also external.
+    """
+    peer = request.client.host if request.client else ""
+    if peer not in _TRUSTED_PROXIES:
+        return True
+    return any(h in request.headers for h in _FORWARD_HEADERS)
+
 
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
     path = request.url.path
-    if (API_KEY
-            and request.method != "OPTIONS"
+    if (request.method != "OPTIONS"
             and path not in _PUBLIC_PATHS
-            and not path.startswith("/novnc")):
-        if request.headers.get("X-API-Key", "") != API_KEY:
-            return JSONResponse({"detail": "API key inválida"}, status_code=401)
+            and not path.startswith("/novnc")
+            and _is_external(request)):
+        provided = request.headers.get("X-API-Key", "")
+        if not API_KEY or not hmac.compare_digest(provided, API_KEY):
+            return JSONResponse({"detail": "No autorizado"}, status_code=401)
     return await call_next(request)
+
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ZEUS_ALLOWED_ORIGINS",
+        "https://zeus-claude.duckdns.org,https://192.168.1.2,"
+        "http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",") if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
     expose_headers=["X-Transcription", "X-Response", "X-Task-Id", "X-Text"],
@@ -509,29 +561,73 @@ def _find_sentence_end(buf: str) -> int:
     return -1
 
 
+def _kill_proc_tree(proc: asyncio.subprocess.Process, sig: int = signal.SIGTERM) -> None:
+    """Best-effort signal to the subprocess's whole process group.
+
+    claude spawns its own shells (curl, python…); killing only the direct
+    child leaves those orphaned. The process is started with
+    start_new_session=True, so it leads its own group and we can reach the
+    whole tree via killpg. Guards on returncode to avoid hitting a reused PID.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+
 async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
-    global _zeus_session_id, _zeus_log, _zeus_msg_count
+    global _zeus_session_id, _zeus_log, _zeus_msg_count, _last_prompt_hash, _pending_context
     _zeus_log.clear()
     _zeus_msg_count += 1
-    if _zeus_msg_count > 5:
+    if _zeus_msg_count > 10:
+        recent = await db_load_history(6)
+        if recent:
+            lines = []
+            for msg in recent:
+                speaker = "Yos" if msg["role"] == "user" else "Zeus"
+                snippet = msg["content"][:120].replace("\n", " ")
+                lines.append(f"{speaker}: {snippet}")
+            _pending_context = (
+                "CONTEXTO DE LA CONVERSACIÓN ANTERIOR (resumen):\n"
+                + "\n".join(lines)
+            )
+        else:
+            _pending_context = None
         _zeus_session_id = None
         _zeus_msg_count = 1
-        log.info("[claude] session reset after 3 messages")
+        log.info("[claude] session reset after 10 messages")
+
+    context_to_inject = _pending_context
+    _pending_context = None
 
     memory_facts = await db_load_memory()
     dynamic_prompt = CLAUDE_VOICE_PROMPT
     if memory_facts:
         facts = "\n".join(f"- {k}: {v}" for k, v in memory_facts.items())
         dynamic_prompt += f"\n\nHECHOS CONOCIDOS SOBRE EL SISTEMA Y YOS:\n{facts}"
+    if context_to_inject:
+        dynamic_prompt += f"\n\n{context_to_inject}"
+        log.info("[claude] injecting prior-session context into new session prompt")
+
+    prompt_hash = hashlib.md5(dynamic_prompt.encode()).hexdigest()
+    send_prompt = (_zeus_session_id is None) or (prompt_hash != _last_prompt_hash)
+    _last_prompt_hash = prompt_hash
 
     cmd = [
         CLAUDE_BIN, "-p", texto,
-        "--append-system-prompt", dynamic_prompt,
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
         "--dangerously-skip-permissions",
     ]
+    if send_prompt:
+        cmd += ["--append-system-prompt", dynamic_prompt]
+        log.info("[claude] system prompt sent (new session or prompt changed)")
     if _zeus_session_id:
         cmd += ["--resume", _zeus_session_id]
 
@@ -541,6 +637,7 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
         stderr=asyncio.subprocess.PIPE,
         cwd=_HOME,
         env={**os.environ, "HOME": _HOME, "USER": _USER},
+        start_new_session=True,  # own process group, so a timeout can kill the whole tree
     )
 
     buffer = ""
@@ -616,33 +713,42 @@ async def _run_claude(task_id: str, texto: str, queue: asyncio.Queue) -> None:
                     await flush_sentence(buffer[:end])
                     buffer = buffer[end:].lstrip()
 
-    while True:
-        chunk = await proc.stdout.read(65536)
-        if not chunk:
-            break
-        raw_buf += chunk
-        while b"\n" in raw_buf:
-            raw_line, raw_buf = raw_buf.split(b"\n", 1)
-            await process_line(raw_line)
+    try:
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            raw_buf += chunk
+            while b"\n" in raw_buf:
+                raw_line, raw_buf = raw_buf.split(b"\n", 1)
+                await process_line(raw_line)
 
-    if raw_buf:
-        await process_line(raw_buf)
+        if raw_buf:
+            await process_line(raw_buf)
 
-    if buffer.strip():
-        await flush_sentence(buffer)
+        if buffer.strip():
+            await flush_sentence(buffer)
 
-    rc = await proc.wait()
-    if rc != 0:
-        stderr = await proc.stderr.read()
-        log.warning(f"[TASK {task_id}] claude exit {rc}: {stderr.decode(errors='ignore')[:200]}")
+        rc = await proc.wait()
+        if rc != 0:
+            stderr = await proc.stderr.read()
+            log.warning(f"[TASK {task_id}] claude exit {rc}: {stderr.decode(errors='ignore')[:200]}")
 
-    if full_response.strip():
-        await db_save_exchange(texto, full_response.strip())
+        if full_response.strip():
+            await db_save_exchange(texto, full_response.strip())
 
-    log.info(f"[TASK {task_id}] stream terminado")
+        log.info(f"[TASK {task_id}] stream terminado")
+    finally:
+        # Never leave the claude subprocess (or its shells) running past this
+        # coroutine — covers the timeout path, where wait_for cancels us mid-read.
+        if proc.returncode is None:
+            _kill_proc_tree(proc, signal.SIGTERM)
+            asyncio.get_running_loop().call_later(3, _kill_proc_tree, proc, signal.SIGKILL)
 
 
-async def run_claude_streaming(task_id: str, texto: str, queue: asyncio.Queue) -> None:
+async def run_claude_streaming(
+    task_id: str, texto: str, queue: asyncio.Queue, timeout: float = CLAUDE_TIMEOUT
+) -> None:
     try:
         await asyncio.wait_for(_claude_sem.acquire(), timeout=20)
     except asyncio.TimeoutError:
@@ -656,9 +762,9 @@ async def run_claude_streaming(task_id: str, texto: str, queue: asyncio.Queue) -
         audio_queues.pop(task_id, None)
         return
     try:
-        await asyncio.wait_for(_run_claude(task_id, texto, queue), timeout=CLAUDE_TIMEOUT)
+        await asyncio.wait_for(_run_claude(task_id, texto, queue), timeout=timeout)
     except asyncio.TimeoutError:
-        log.warning(f"[TASK {task_id}] timeout tras {CLAUDE_TIMEOUT}s")
+        log.warning(f"[TASK {task_id}] timeout tras {timeout}s")
         try:
             audio = await tts_bytes("Lo siento, la tarea tardó demasiado.")
             await queue.put({"status": "ready", "audio": audio, "text": "Lo siento, la tarea tardó demasiado."})
@@ -813,11 +919,22 @@ async def manifest():
 
 @app.get("/sw.js")
 async def service_worker():
-    return FileResponse(
-        "client/sw.js",
+    sw_path = Path("client/sw.js")
+    html_path = Path("client/index.html")
+    sw_text = sw_path.read_text()
+    h = hashlib.md5(html_path.read_bytes()).hexdigest()[:8]
+    sw_text = re.sub(r"const CACHE = 'zeus-[^']*'", f"const CACHE = 'zeus-{h}'", sw_text)
+    return Response(
+        content=sw_text,
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
     )
+
+
+@app.get("/version")
+async def version():
+    h = hashlib.md5(Path("client/index.html").read_bytes()).hexdigest()[:8]
+    return JSONResponse({"hash": h})
 
 
 @app.get("/icon.svg")
@@ -863,6 +980,14 @@ async def recuerda(request: Request):
         raise HTTPException(status_code=400, detail="'clave' y 'valor' requeridos")
     await db_set_memory(key, value)
     return {"ok": True, "clave": key, "valor": value}
+
+
+@app.delete("/historia")
+async def borrar_historia(request: Request):
+    check_rate_limit(request.client.host)
+    await db_clear_history()
+    log.info("[historia] conversación borrada por petición")
+    return JSONResponse({"ok": True, "mensaje": "Historial de conversación eliminado"})
 
 
 @app.get("/siguiente/{task_id}")
@@ -921,27 +1046,23 @@ async def voz(request: Request, background_tasks: BackgroundTasks, audio: Upload
         except OSError:
             pass
 
-    if not texto:
-        log.info("Transcripción vacía — enviando audio 'no te he entendido'")
-        try:
-            audio_bytes = await tts_bytes("No te he entendido, repite por favor.")
-            log.info(f"TTS 'no te he entendido' OK — {len(audio_bytes)} bytes")
-            return Response(
-                content=audio_bytes, media_type="audio/mpeg",
-                headers={"X-Transcription": "", "X-Response": "No te he entendido"},
-            )
-        except Exception as e:
-            log.warning(f"TTS 'no te he entendido' falló: {e}")
-            return JSONResponse(
-                {"status": "error", "message": "No te he entendido, repite por favor."},
-                status_code=200,
-            )
+    if not texto or _is_noise_transcript(texto):
+        if texto:
+            log.info(f"Transcripción basura descartada: '{texto}'")
+        else:
+            log.info("Transcripción vacía — descartando silencio")
+        return JSONResponse({"status": "noise", "transcripcion": texto or ""}, status_code=200)
 
     # Queue created BEFORE background task to eliminate race condition
     task_id = uuid.uuid4().hex
     queue: asyncio.Queue = asyncio.Queue()
     audio_queues[task_id] = queue
     save_task_id(task_id)
+
+    # A login waiting for a code/extra datum takes priority: route the answer
+    # to it instead of starting a new Claude turn.
+    if _route_to_pending_login(texto, task_id, queue, background_tasks):
+        return JSONResponse({"status": "processing", "task_id": task_id, "transcripcion": texto})
 
     background_tasks.add_task(run_claude_streaming, task_id, texto, queue)
     return JSONResponse({
@@ -963,6 +1084,11 @@ async def texto_endpoint(request: Request, background_tasks: BackgroundTasks):
     queue: asyncio.Queue = asyncio.Queue()
     audio_queues[task_id] = queue
     save_task_id(task_id)
+
+    # A login waiting for a code/extra datum takes priority: route the answer
+    # to it instead of starting a new Claude turn.
+    if _route_to_pending_login(texto, task_id, queue, background_tasks):
+        return JSONResponse({"status": "processing", "task_id": task_id, "transcripcion": texto})
 
     background_tasks.add_task(run_claude_streaming, task_id, texto, queue)
     return JSONResponse({
@@ -1018,14 +1144,135 @@ async def browser_save_session():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── 2FA / verification-code handoff ───────────────────────────────────────────
+_code_slots:  dict[str, str | None]       = {}
+_code_events: dict[str, asyncio.Event]    = {}
+
+
+def _pending_code_store() -> str | None:
+    """Store whose login is currently blocked waiting for a code / extra datum."""
+    for store, ev in _code_events.items():
+        if ev is not None and not ev.is_set():
+            return store
+    return None
+
+
+def _extract_code(text: str) -> str:
+    """Turn a spoken/typed answer into the value handed back to the login.
+
+    OTP codes are read out digit by digit, so if the answer carries digits we
+    keep just those ("el código es 2 5 5 0 9 1" -> "255091"). Otherwise (e.g. a
+    security answer) we pass the trimmed text as-is.
+    """
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 3:
+        return digits
+    return text.strip()
+
+
+def _submit_pending_code(store: str, value: str) -> None:
+    _code_slots[store] = value
+    ev = _code_events.get(store)
+    if ev:
+        ev.set()
+
+
+async def _deliver_ack(task_id: str, queue: asyncio.Queue, message: str) -> None:
+    """Speak a short confirmation and finish, reusing the normal streaming flow."""
+    try:
+        audio = await tts_bytes(message)
+        if audio:
+            await queue.put({"status": "ready", "audio": audio, "text": message})
+    except Exception:
+        pass
+    await queue.put({"status": "done"})
+    clear_task_id()
+    asyncio.get_running_loop().call_later(300, lambda: audio_queues.pop(task_id, None))
+
+
+def _route_to_pending_login(
+    texto: str, task_id: str, queue: asyncio.Queue, background_tasks: BackgroundTasks
+) -> bool:
+    """If a store login is waiting for input, hand `texto` to it (by voice or text).
+
+    Returns True when consumed as a login answer — the caller then skips the
+    Claude turn (and the "ocupado" it would cause) and just acks the user.
+    """
+    store = _pending_code_store()
+    if not store:
+        return False
+    value = _extract_code(texto)
+    _submit_pending_code(store, value)
+    log.info(f"[auth] respuesta del usuario enrutada al login de {store}: '{value}'")
+    background_tasks.add_task(_deliver_ack, task_id, queue, "Recibido, continúo.")
+    return True
+
+
+async def _run_login(store: str, task_id: str, prompt: str, queue: asyncio.Queue) -> None:
+    """Drive a store login and always clean up its pending-code state on exit.
+
+    Without this, a login that dies mid-OTP (timeout/error) would leave a stale
+    _code_events entry, and the next unrelated voice/text would be misrouted to it.
+    """
+    try:
+        await run_claude_streaming(task_id, prompt, queue, timeout=LOGIN_TIMEOUT)
+    finally:
+        _code_slots.pop(store, None)
+        ev = _code_events.pop(store, None)
+        if ev and not ev.is_set():
+            ev.set()  # unblock any await-code still polling
+
+
+@app.post("/auth/need-code/{store}")
+async def auth_need_code(store: str, text: str = "Introduce el código de verificación"):
+    _code_slots[store]  = None
+    _code_events[store] = asyncio.Event()
+    shopper._emit({"type": "need_code", "text": text})
+    return JSONResponse({"ok": True})
+
+@app.get("/auth/await-code/{store}")
+async def auth_await_code(store: str):
+    ev = _code_events.get(store)
+    if not ev:
+        raise HTTPException(status_code=404, detail="No hay código pendiente para esta tienda")
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=240)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Timeout esperando código del usuario")
+    code = _code_slots.pop(store, None)
+    _code_events.pop(store, None)
+    return JSONResponse({"code": code})
+
+@app.post("/auth/code/{store}")
+async def auth_submit_code(store: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    code = (body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Código vacío")
+    _code_slots[store] = code
+    ev = _code_events.get(store)
+    if ev:
+        ev.set()
+    return JSONResponse({"ok": True})
+
+
 @app.post("/auth/credentials/{store}")
 async def auth_credentials(store: str, request: Request, background_tasks: BackgroundTasks):
     store = store.lower()
     if store not in shopper.STORE_NAMES:
         raise HTTPException(status_code=400, detail=f"Tienda desconocida: {store}")
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     email    = (body.get("email")    or "").strip()
     password = (body.get("password") or "").strip()
+    display  = (body.get("salida") or body.get("display") or "screen").strip().lower()
+    if display not in ("screen", "novnc"):
+        display = "screen"
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
 
@@ -1049,11 +1296,12 @@ async def auth_credentials(store: str, request: Request, background_tasks: Backg
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Headed stores (Carrefour, Alcampo): Claude drives the browser
+    # Headed stores: Claude drives the browser on the chosen output (screen / noVNC)
     try:
-        initial_url = await asyncio.wait_for(shopper.start_control_browser(store), timeout=25)
+        ctrl = await asyncio.wait_for(shopper.start_control_browser(store, display=display), timeout=40)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo abrir Chrome: {e}")
+    initial_url = ctrl["url"]
 
     task_id = uuid.uuid4().hex
     queue: asyncio.Queue = asyncio.Queue()
@@ -1068,13 +1316,27 @@ async def auth_credentials(store: str, request: Request, background_tasks: Backg
         "Cuando el login sea exitoso ejecuta: "
         "curl -s -X POST http://localhost:8000/browser/save-session "
         "para guardar la sesión. "
-        "Si encuentras algo inesperado como un código de verificación, CAPTCHA o pregunta de seguridad, "
-        "descríbeselo claramente al usuario y espera su respuesta antes de continuar. "
+        f"Si encuentras una pantalla de código de verificación (SMS/email OTP) o el "
+        f"sitio te pide cualquier dato extra (pregunta de seguridad, etc.): "
+        f"1) Pídeselo al usuario por voz y dile que puede responderte hablando o "
+        f"escribiéndolo en la app. "
+        f"2) Ejecuta: curl -s -X POST 'http://localhost:8000/auth/need-code/{store}?text=QUE_NECESITAS' "
+        f"(sustituye QUE_NECESITAS por una descripción corta de lo que pides). "
+        f"3) Espera la respuesta: curl -s http://localhost:8000/auth/await-code/{store} "
+        f"(el JSON devuelto trae el campo 'code' con lo que el usuario diga o escriba). "
+        f"4) Escribe ese valor en el campo correspondiente del navegador y continúa. "
+        "Si encuentras CAPTCHA o pregunta de seguridad inesperada, descríbeselo al usuario. "
         "Sé conciso en tus respuestas de voz."
     )
 
-    background_tasks.add_task(run_claude_streaming, task_id, prompt, queue)
-    return JSONResponse({"ok": True, "store": store, "task_id": task_id})
+    background_tasks.add_task(_run_login, store, task_id, prompt, queue)
+    resp = {"ok": True, "store": store, "task_id": task_id, "display": display}
+    if ctrl.get("token"):
+        resp["novnc_url"] = (
+            f"/novnc/vnc.html?path=view-ws%2F{ctrl['token']}"
+            "&autoconnect=1&resize=scale&reconnect=0&show_dot=true"
+        )
+    return JSONResponse(resp)
 
 
 @app.post("/auth/connect/{store}")
@@ -1205,6 +1467,58 @@ async def novnc_ws_proxy(websocket: WebSocket, token: str):
     await asyncio.wait([fwd, bwd], return_when=asyncio.FIRST_COMPLETED)
     fwd.cancel()
     bwd.cancel()
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
+@app.websocket("/view-ws/{token}")
+async def view_ws_proxy(websocket: WebSocket, token: str):
+    expected = shopper.view_session_token()
+    if not expected or token != expected:
+        await websocket.close(code=4403)
+        return
+    await websocket.accept(subprotocol=("binary" if "binary" in (websocket.scope.get("subprotocols") or []) else None))
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", shopper.VIEW_VNC_PORT)
+    except Exception as e:
+        log.warning(f"view_ws: no conecta a VNC: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    async def _c2v():
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def _v2c():
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    a = asyncio.create_task(_c2v())
+    b = asyncio.create_task(_v2c())
+    await asyncio.wait([a, b], return_when=asyncio.FIRST_COMPLETED)
+    a.cancel()
+    b.cancel()
     try:
         await websocket.close()
     except Exception:

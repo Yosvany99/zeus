@@ -1,0 +1,7 @@
+[Unit]
+Description=DuckDNS IP Update
+
+[Service]
+Type=oneshot
+User=yos99
+ExecStart=/home/yos99/zeus/duckdns-update.sh

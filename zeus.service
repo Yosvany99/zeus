@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=axel
-WorkingDirectory=/home/axel/zeus
-EnvironmentFile=/home/axel/zeus/.env
-ExecStart=/home/axel/zeus/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+User=yos99
+WorkingDirectory=/home/yos99/zeus
+EnvironmentFile=/home/yos99/zeus/.env
+ExecStart=/home/yos99/zeus/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=5
 

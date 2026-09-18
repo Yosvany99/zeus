@@ -1,5 +1,5 @@
-// ⚠ BUMP THIS on every deploy (format: zeus-YYYYMMDD or zeus-YYYYMMDD-N)
-const CACHE = 'zeus-20260522';
+// CACHE key is injected by the server (MD5 of index.html) — do not edit manually
+const CACHE = 'zeus-dev';
 const SHELL = ['/', '/manifest.json', '/icon.svg', '/icon-maskable.svg'];
 
 self.addEventListener('install', e => {
