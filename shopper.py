@@ -537,16 +537,18 @@ interactivos visibles en la página (con su texto exacto). Tu trabajo es decidir
 
 Responde SOLO con JSON válido, sin texto extra:
 {
-  "action": "click_text" | "type" | "done" | "back" | "navigate",
+  "action": "click_text" | "type" | "type_credential" | "done" | "back" | "navigate",
   "target": "<texto exacto del elemento a clicar, copiado literalmente de la lista>",
   "text": "<texto a escribir, solo para type>",
+  "field": "email" | "password",
   "url": "<url completa, solo para navigate>",
   "reason": "<frase corta>"
 }
 Reglas:
 - "click_text": elige el texto EXACTO del elemento de la lista que debes pulsar
 - "type": escribe en el campo actualmente enfocado (SIEMPRE haz click_text sobre el campo input primero para enfocarlo)
-- Los campos de formulario (email, contraseña) aparecen en la lista con su placeholder como texto; haz click_text sobre ellos antes de type
+- "type_credential": usa esta acción (con "field": "email" o "field": "password") para rellenar las credenciales de acceso — tú NUNCA recibirás ni escribirás su valor real, solo indicas qué campo es
+- Los campos de formulario (email, contraseña) aparecen en la lista con su placeholder como texto; haz click_text sobre ellos antes de type/type_credential
 - "back": la página es incorrecta, vuelve atrás
 - "navigate": ve directamente a esa URL
 - "done": sesión iniciada correctamente
@@ -604,9 +606,17 @@ async def _vision_step(page, goal: str, history: list[str]) -> dict:
     return result
 
 
-async def _vision_navigate(page, goal: str, max_steps: int = 12) -> None:
-    """Drive the browser using LLM vision to decide WHAT, DOM to execute WHERE."""
+async def _vision_navigate(
+    page, goal: str, max_steps: int = 12, credentials: dict[str, str] | None = None
+) -> None:
+    """Drive the browser using LLM vision to decide WHAT, DOM to execute WHERE.
+
+    `credentials` (e.g. {"email": ..., "password": ...}) never enters the
+    prompt or the model's context — the model only names a field via the
+    "type_credential" action, and the real value is filled here locally.
+    """
     _emit({"type": "start", "text": "Iniciando navegador visual con IA..."})
+    credentials = credentials or {}
     history: list[str] = []
     _last_action_key = None
     _repeat_count = 0
@@ -665,6 +675,15 @@ async def _vision_navigate(page, goal: str, max_steps: int = 12) -> None:
 
         elif act == "type":
             await page.keyboard.type(action["text"], delay=50)
+            await page.wait_for_timeout(500)
+
+        elif act == "type_credential":
+            field = action.get("field", "")
+            value = credentials.get(field, "")
+            if not value:
+                log.warning(f"[vision] type_credential pidió campo desconocido: '{field}'")
+            else:
+                await page.keyboard.type(value, delay=50)
             await page.wait_for_timeout(500)
 
         else:
@@ -876,14 +895,15 @@ async def _carrefour_login(page, email: str = None, password: str = None) -> Non
     await _vision_navigate(
         page,
         goal=(
-            f"Hay un panel/drawer de login abierto en la página de Carrefour. "
-            f"Haz clic en el campo de email e introduce '{email}'. "
-            f"Luego haz clic en el campo de contraseña e introduce '{password}'. "
+            "Hay un panel/drawer de login abierto en la página de Carrefour. "
+            "Haz clic en el campo de email e introduce la credencial con type_credential field=\"email\". "
+            "Luego haz clic en el campo de contraseña e introduce la credencial con type_credential field=\"password\". "
             "Finalmente pulsa el botón 'Acceder' para iniciar sesión. "
             "NO pulses 'Empezar a comprar', 'Crear cuenta' ni 'Registrarse'. "
             "Cuando veas el nombre del usuario o 'Área privada' o 'Mis pedidos', responde con action=done."
         ),
         max_steps=8,
+        credentials={"email": email, "password": password},
     )
 
 

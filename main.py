@@ -481,20 +481,21 @@ app = FastAPI(title="ZEUS", lifespan=lifespan)
 
 _PUBLIC_PATHS = frozenset(["/", "/manifest.json", "/sw.js", "/icon.svg", "/icon-maskable.svg"])
 _TRUSTED_PROXIES = frozenset(["127.0.0.1", "::1"])
-_FORWARD_HEADERS = ("x-forwarded-for", "x-real-ip", "cf-connecting-ip", "forwarded")
+INTERNAL_KEY = os.getenv("ZEUS_INTERNAL_KEY", "")
 
 
-def _is_external(request: Request) -> bool:
-    """True if the request arrived through nginx / the cloudflared tunnel.
+def _has_valid_internal_key(request: Request) -> bool:
+    """True only if the caller is on localhost AND presents the internal secret.
 
-    Claude's own curl calls hit uvicorn directly from localhost with no
-    forwarding headers; the reverse proxy and the tunnel always add them.
-    Any socket peer that is not a trusted local proxy is also external.
+    This is a positive check (a shared secret Claude's own curl calls must
+    send), never inferred from the mere absence of forwarding headers, which
+    any client can omit to spoof "internal" status.
     """
     peer = request.client.host if request.client else ""
-    if peer not in _TRUSTED_PROXIES:
-        return True
-    return any(h in request.headers for h in _FORWARD_HEADERS)
+    if peer not in _TRUSTED_PROXIES or not INTERNAL_KEY:
+        return False
+    provided = request.headers.get("X-Internal-Key", "")
+    return hmac.compare_digest(provided, INTERNAL_KEY)
 
 
 @app.middleware("http")
@@ -503,7 +504,7 @@ async def _auth_middleware(request: Request, call_next):
     if (request.method != "OPTIONS"
             and path not in _PUBLIC_PATHS
             and not path.startswith("/novnc")
-            and _is_external(request)):
+            and not _has_valid_internal_key(request)):
         provided = request.headers.get("X-API-Key", "")
         if not API_KEY or not hmac.compare_digest(provided, API_KEY):
             return JSONResponse({"detail": "No autorizado"}, status_code=401)
@@ -1203,7 +1204,7 @@ def _route_to_pending_login(
         return False
     value = _extract_code(texto)
     _submit_pending_code(store, value)
-    log.info(f"[auth] respuesta del usuario enrutada al login de {store}: '{value}'")
+    log.info(f"[auth] user provided code for {store} (len={len(value)})")
     background_tasks.add_task(_deliver_ack, task_id, queue, "Recibido, continúo.")
     return True
 
